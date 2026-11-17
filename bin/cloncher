@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+project=$(dirname "$(realpath "$0")")/..
+export CLONCHER_ROOT="$project"
+exec jolt -Srepro -Scp "$project/src" -m cloncher.main "$@"
