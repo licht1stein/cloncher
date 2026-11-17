@@ -1,7 +1,7 @@
 (ns cloncher.menu
   "Desktop menu providers and actions ported from the dotfiles launcher."
   (:require [babashka.fs :as fs]
-            [babashka.process :as p]
+            [cloncher.process :as p]
             [clojure.string :as str]
             [clojure.java.io :as io]
             [clojure.edn :as edn]
@@ -24,9 +24,28 @@
                   (str/join " "))]
     (format "niri msg action spawn -- kitty %s sh -c '%s'" opts script)))
 
+(declare get-bluetooth-items
+         get-claude-items
+         get-connect-items
+         get-focus-items
+         get-keybindings-menu
+         get-look-items
+         get-mail-auth-items
+         get-mail-code-items
+         get-main-menu-items
+         get-power-profile-items
+         get-record-menu-items
+         get-sound-items
+         get-tailscale-menu-items
+         get-wifi-items
+         install-aur-action
+         rename-workspace
+         scan-bluetooth!
+         scan-wifi!)
+
 (def menus
   {:main {:prompt "Menu"
-          :items-fn 'get-main-menu-items}
+          :items-fn (fn [] (get-main-menu-items))}
 
    ;; Mod+Space's first row. The launcher owns the app list: this view has
    ;; no menu rows of its own.
@@ -51,10 +70,10 @@
                   {:icon "󰌆" :label "Codes & links" :action :mail-codes}]}
 
    :mail-codes {:prompt "Codes & links"
-                :items-fn 'get-mail-code-items}
+                :items-fn (fn [] (get-mail-code-items))}
 
    :mail-auth {:prompt "Authorize mail"
-               :items-fn 'get-mail-auth-items}
+               :items-fn (fn [] (get-mail-auth-items))}
 
    :screen {:prompt "Screen"
             :items [{:icon "󰹑" :label "Screenshot region" :action "~/dotfiles/bin/menu/screenshot region"}
@@ -72,19 +91,19 @@
                     {:icon "󰨸" :label "Clipboard history" :action "noctalia msg panel-toggle clipboard"}]}
 
    :connect {:prompt "Connect"
-             :items-fn 'get-connect-items}
+             :items-fn (fn [] (get-connect-items))}
 
    :wifi {:prompt "Wi-Fi networks"
-          :items-fn 'get-wifi-items}
+          :items-fn (fn [] (get-wifi-items))}
 
    :bluetooth {:prompt "Bluetooth devices"
-               :items-fn 'get-bluetooth-items}
+               :items-fn (fn [] (get-bluetooth-items))}
 
    :look {:prompt "Look"
-          :items-fn 'get-look-items}
+          :items-fn (fn [] (get-look-items))}
 
    :focus {:prompt "Focus"
-           :items-fn 'get-focus-items}
+           :items-fn (fn [] (get-focus-items))}
 
    :system {:prompt "System"
             :items [{:icon "󰏔" :label "Packages" :action :install}
@@ -92,24 +111,24 @@
                     {:icon "󰾅" :label "Power profile" :action :power-profile}
                     {:icon "󰚩" :label "Claude accounts" :action :claude}
                     {:icon "󰌌" :label "Keybindings" :action :keybindings}
-                    {:icon "󰑕" :label "Rename workspace" :action 'rename-workspace}
+                    {:icon "󰑕" :label "Rename workspace" :action (fn [] (rename-workspace))}
                     {:icon "󱁻" :label "Edit config" :action :config}]}
 
    :sound {:prompt "Sound"
-           :items-fn 'get-sound-items}
+           :items-fn (fn [] (get-sound-items))}
 
    :power-profile {:prompt "Power profile"
-                   :items-fn 'get-power-profile-items}
+                   :items-fn (fn [] (get-power-profile-items))}
 
    :claude {:prompt "Claude accounts"
-            :items-fn 'get-claude-items}
+            :items-fn (fn [] (get-claude-items))}
 
    :keybindings {:prompt "Keybindings"
-                 :items-fn 'get-keybindings-menu}
+                 :items-fn (fn [] (get-keybindings-menu))}
 
 
    :tailscale {:prompt "Tailscale"
-               :items-fn 'get-tailscale-menu-items}
+               :items-fn (fn [] (get-tailscale-menu-items))}
 
    ;; Noctalia's built-in session actions (`noctalia msg session <action>`),
    ;; in the order and with the labels of its own session panel.
@@ -128,14 +147,14 @@
    :projects {:prompt "Projects" :native true}
 
    :record {:prompt "Record"
-            :items-fn 'get-record-menu-items}
+            :items-fn (fn [] (get-record-menu-items))}
 
    :install
    {:prompt "Packages"
     :items [{:icon "󰏖" :label "Package" :subtitle "filter by repository"
              :action (kitty "~/dotfiles/bin/menu/pkg.clj install --repo"
                             :class "pkg" :title "Install")}
-            {:icon "󰣇" :label "AUR" :action 'install-aur-action}
+            {:icon "󰣇" :label "AUR" :action (fn [] (install-aur-action))}
             {:icon "󰆴" :label "Remove"
              :action (kitty "~/dotfiles/bin/menu/pkg.clj remove"
                             :class "pkg" :title "Install")}
@@ -181,7 +200,7 @@
   nil)
 
 (defn show-menu [prompt items]
-  (*pick!* {:mode :dmenu :prompt prompt :lines (vec items)}))
+  (*pick!* {:mode :dmenu :prompt prompt :lines (vec items) :allow-empty? true}))
 
 (defn prompt-input [prompt]
   (show-menu prompt []))
@@ -657,7 +676,7 @@
 (defn prompt-secret
   "Ask for a masked value. Preserve spaces and treat cancellation as nil."
   [prompt]
-  (let [value (*pick!* {:mode :secret :prompt prompt})]
+  (let [value (*pick!* {:mode :secret :prompt prompt :timeout-ms 120000})]
     (when (and (seq value) (not (re-find #"[\p{Cntrl}]" value))) value)))
 
 (defn- wifi-auth-prompt
@@ -868,7 +887,7 @@
             :hint (if on? "turn off" "turn on") :refresh true
             :action "noctalia msg wifi-toggle"}
            {:icon "󰑓" :section 2 :label "Scan Wi-Fi networks" :hint "scan and refresh"
-            :refresh true :progress "Scanning Wi-Fi networks…" :action 'scan-wifi!}
+            :refresh true :progress "Scanning Wi-Fi networks…" :action (fn [] (scan-wifi!))}
            {:icon "󰒓" :section 2 :label "Wi-Fi settings"
             :subtitle "hidden networks · advanced settings"
             :action "noctalia msg panel-open control-center network"}]))))
@@ -926,7 +945,7 @@
                            (not on?) "Turn on Bluetooth to discover devices"
                            :else "No Bluetooth devices — scan to discover")}])
           [{:icon "󰑓" :label "Scan Bluetooth devices" :hint "scan for 8 seconds and refresh"
-            :refresh true :action 'scan-bluetooth!}
+            :refresh true :progress "Scanning Bluetooth devices…" :action (fn [] (scan-bluetooth!))}
            {:icon "󰒓" :label "Bluetooth settings" :subtitle "advanced settings · remove devices"
             :action "noctalia msg panel-open control-center bluetooth"}]))))
 
@@ -1014,6 +1033,7 @@
                         :subtitle (str what sender " · " age)
                         :row-id (str "mail " k " " (inc i))
                         :hint "copy"
+                        :volatile true
                         :code? code?
                         :date (:date-unix m)
                         :action #(deref (p/process {:in (str (:value a)) :out :discard :err :discard} "wl-copy"))}
@@ -1201,7 +1221,6 @@
     (if-let [items-fn (:items-fn menu)]
       (cond
         (fn? items-fn) (items-fn)
-        (symbol? items-fn) ((ns-resolve 'cloncher.menu items-fn))
         :else (throw (ex-info "Invalid items-fn" {:items-fn items-fn})))
       (:items menu))))
 (defn safe-menu-items
@@ -1304,7 +1323,6 @@
     (string? action) (p/sh "sh" "-c" action)
     (vector? action) (run! execute-action action)
     (fn? action) (action)
-    (symbol? action) ((ns-resolve 'cloncher.menu action))
     :else (println "Unknown action:" action)))
 ;; ── serve: providers and the loop ───────────────────────────────────────────
 
@@ -1440,3 +1458,20 @@
       result (conj {:icon "󰃬" :label result :path expr :hint "copy"
                     :calc {:expr expr :result result} :action #(copy! result)})
       forced? (into (tape-rows tape (when-not result (str/trim (subs (str/trim q) 1))))))))
+
+(def source-file *file*)
+
+(defn resolve-row
+  "Resolve a cached row ID by following the item’s current submenu path."
+  [key id]
+  (let [path (second (str/split id #"\t" 2))
+        parents (when (seq path) (str/split path #" › "))
+        target (reduce (fn [target parent-label]
+                         (or (some (fn [{:keys [label action]}]
+                                     (when (and (= label parent-label) (menu-item? action)) action))
+                                   (safe-menu-items target))
+                             (reduced nil)))
+                       key parents)]
+    (when target
+      (some #(when (= id (format-item (cond-> % (seq path) (assoc :path path)))) %)
+            (safe-menu-items target)))))

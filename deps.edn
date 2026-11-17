@@ -1,14 +1,16 @@
 {:paths ["src"]
  :aliases {:app {:main-opts ["-m" "cloncher.main"]}
+           :cli {:extra-paths ["bin"]}
            :prod {:main-opts ["-m" "cloncher.main"]}
            :dev {:main-opts ["-m" "cloncher.dev"]}
-           :eval {:extra-paths ["dev"] :main-opts ["-m" "cloncher.eval"]}}
+           :eval {:extra-paths ["dev"] :main-opts ["-m" "cloncher.eval"]}
+           :test {:extra-paths ["test"] :main-opts ["-m" "cloncher.parity-test"]}}
  :tasks {dev {:doc "Open a CUI development window with a loopback nREPL."
               :task (apply shell "jolt" "-Srepro" "-M:dev" *command-line-args*)}
          eval {:doc "Evaluate a form in the running Cloncher Dev window."
                :task (apply shell "jolt" "-Srepro" "-M:eval" *command-line-args*)}
          prod {:doc "Run one launcher request without the development REPL."
-               :task (apply shell "jolt" "-Srepro" "-M:prod" *command-line-args*)}
+               :task (System/exit (:exit (apply shell {:continue true}
+                                                "jolt" "-Srepro" "-M:prod" *command-line-args*)))}
          release {:doc "Build target/cloncher, preferring a compiler-free native executable."
-                  :task (do (shell "sh" "bin/build-cui")
-                            (shell "jolt" "-f" "bin/release.clj"))}}}
+                  :task (shell "jolt" "-A:cli" "-f" "bin/release.clj")}}}

@@ -78,6 +78,21 @@
                        (when (= (= op 'when) (boolean (val a))) (body env child (nnext form)))
                        (= op 'and) (reduce (fn [v x] (if v (val x) (reduced v))) true (rest form))
                        (= op 'or) (reduce (fn [v x] (if v (reduced v) (val x))) nil (rest form))
+                       (contains? #{'if-let 'when-let} op)
+                       (let [[name value :as binding] a]
+                         (when-not (and (vector? binding) (= 2 (count binding)) (symbol? name))
+                           (throw (ex-info "if-let expects one symbol/value pair" {})))
+                         (if-let [value (val value)]
+                           (if (= op 'if-let)
+                             (eval-form (assoc env name value) child b)
+                             (body (assoc env name value) child (nnext form)))
+                           (when (= op 'if-let) (val c))))
+                       (= op 'as->)
+                       (do
+                         (when-not (symbol? b) (throw (ex-info "as-> expects a name" {})))
+                         (reduce (fn [value expression]
+                                   (eval-form (assoc env b value) child expression))
+                                 (val a) (nthnext form 3)))
                        (contains? #{'let 'let*} op)
                        (do
                          (when-not (and (vector? a) (even? (count a)) (every? symbol? (take-nth 2 a)))

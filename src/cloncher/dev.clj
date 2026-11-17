@@ -3,11 +3,14 @@
   (:require [babashka.fs :as fs]
             [cloncher.cui :as cui]
             [cloncher.main :as app]
+            [cloncher.palette :as palette]
+            [cloncher.view :as view]
             [jolt.nrepl :as nrepl]))
 
 (defonce ^:private control (atom {}))
 (defonce ^:private redraw (atom nil))
 (defonce ^:private session (app/session))
+(defonce ^:private reload-lock (Object.))
 
 (defn state [] (app/state session))
 
@@ -17,13 +20,18 @@
 (defn reload!
   "Reload presentation and session code in the running window."
   []
-  (require 'cloncher.view :reload)
-  (require 'cloncher.main :reload)
-  (require 'cloncher.dev :reload)
+  (locking reload-lock
+    (doseq [namespace '[cloncher.json cloncher.process cloncher.persistence cloncher.socket cloncher.daemon
+                        cloncher.cui cloncher.panel cloncher.palette cloncher.search cloncher.icons
+                        cloncher.desktop cloncher.menu cloncher.sources cloncher.commands
+                        cloncher.files cloncher.preview cloncher.edit cloncher.lisp
+                        cloncher.machine cloncher.usage cloncher.view-cache cloncher.view
+                        cloncher.main cloncher.dev]]
+      (require namespace :reload)))
   (redraw!))
 
 (def ^:private view-kinds
-  #{:off :root :apps :menu :files :file :projects :project :tasks :dmenu :secret})
+  #{:off :root :apps :menu :files :file :projects :project :project-add :tasks :dmenu :secret})
 
 (defn show!
   "Queue a view on the CUI thread. Accept a view keyword or a map such as
@@ -84,6 +92,7 @@
 
 (defn- open-preview! [ui buffer definition]
   (cui/clear-input! buffer)
+  (app/clear-preview! session ui)
   (app/show! session definition)
   (cui/redraw! ui))
 
@@ -97,7 +106,7 @@
   (let [{:keys [open]} (first (swap-vals! control dissoc :open))
         _ (when open (open-preview! ui buffer open))
         off? (= :off (app/status session))
-        width (max 1 (min 760 (- (cui/width ui) 16)))]
+        width (max 1 (min (+ view/preview-width 48) (- (cui/width ui) 16)))]
     (cui/bar! ui "development-window")
     (try
       (spacer! ui "left-gutter")
@@ -108,6 +117,7 @@
           (open-preview! ui buffer (if off? {:kind :root} {:kind :off})))
         (if (= :on (app/status session))
           (do
+            (cui/apply-colors! ui (palette/load-colors))
             (app/draw-frame! session ui buffer {:preview? true})
             (when (= :complete (app/status session))
               (open-preview! ui buffer {:kind :off})))
@@ -130,7 +140,14 @@
       (flush)
       (try
         (cui/window! {:width 760 :height 610 :title "Cloncher Dev" :redraw redraw}
-                     (fn [ui buffer] (render! ui buffer)))
+                     (fn [ui buffer]
+                       (locking reload-lock
+                         (try (render! ui buffer)
+                              (catch Exception error
+                                (binding [*out* *err*] (println "Cloncher Dev:" (ex-message error)))
+                                (app/close-session! session)
+                                (cui/caption! ui (str "Preview error · " (ex-message error)))
+                                (cui/wake-in! ui 0.1))))))
         (finally
           (app/close-session! session)
           (when-let [capture (:capture @control)]

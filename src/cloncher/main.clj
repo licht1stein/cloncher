@@ -1,44 +1,64 @@
 (ns cloncher.main
   (:require [babashka.fs :as fs]
-            [babashka.process :as p]
+            [cloncher.process :as p]
             [clojure.string :as str]
             [clojure.java.io :as io]
+            [cloncher.commands :as commands]
             [cloncher.cui :as cui]
+            [cloncher.daemon :as daemon]
+            [cloncher.desktop :as desktop]
+            [cloncher.files :as files]
+            [cloncher.edit :as edit]
+            [cloncher.persistence :as disk]
+            [cloncher.preview :as preview]
+            [cloncher.palette :as palette]
+            [cloncher.panel :as panel]
             [cloncher.lisp :as lisp]
             [cloncher.machine :as machine]
             [cloncher.menu :as menu]
             [cloncher.search :as search]
+            [cloncher.socket :as socket]
             [cloncher.sources :as sources]
-            [cloncher.view :as ui-view]))
+            [cloncher.view :as ui-view]
+            [cloncher.usage :as usage]
+            [cloncher.view-cache :as view-cache]))
 
 (def usage
-  "Usage: cloncher [root | apps | menu [NAME] | files | projects | project-add DIRECTORY | dmenu [-p PROMPT] | secret [-p PROMPT] | screenshot PATH]")
+  "Usage: cloncher [root | apps | menu [NAME] | files | projects | projects add [DIRECTORY] | project-add [DIRECTORY] | dmenu [-p PROMPT] | secret [-p PROMPT] | daemon | ping | close | screenshot PATH | --screenshot PATH]")
 
 (defn parse-args [args]
-  (let [[command argument value & extra] args]
+  (let [args (if (= ["projects" "add"] (vec (take 2 args)))
+               (cons "project-add" (drop 2 args)) args)
+        [command argument value & extra] args
+        picker? (contains? #{"dmenu" "secret"} command)]
     (when (or (seq extra)
-              (if (contains? #{"dmenu" "secret"} command)
+              (if picker?
                 (and argument (not (and (contains? #{"-p" "--prompt"} argument) value)))
                 (some? value)))
       (throw (ex-info usage {})))
     (case command
-      (nil "root") (if argument (throw (ex-info usage {})) {:mode :launcher :kind :root})
-      "apps" (if argument (throw (ex-info usage {})) {:mode :launcher :kind :apps})
-      "files" (if argument (throw (ex-info usage {})) {:mode :launcher :kind :files})
-      "projects" (if argument (throw (ex-info usage {})) {:mode :launcher :kind :projects})
+      (nil "root" "apps" "files" "projects")
+      (if argument (throw (ex-info usage {})) {:mode :launcher :kind (keyword (or command "root"))})
       "menu" {:mode :launcher :kind :menu
               :key (keyword (str/replace-first (or argument "main") #"^:" ""))}
-      "dmenu" {:mode :dmenu :prompt (or value "Search")}
+      "dmenu" {:mode :dmenu :prompt (or value "")}
       "secret" {:mode :secret :prompt (or value "Password")}
-      "project-add" (if argument {:mode :project-add :path argument} (throw (ex-info usage {})))
-      "screenshot" (if argument {:mode :launcher :kind :root :screenshot argument}
-                       (throw (ex-info usage {})))
+      "project-add" {:mode :project-add :path (or argument ".")}
+      "screenshot" (if argument {:mode :control} (throw (ex-info usage {})))
+      "--screenshot" (if argument {:mode :launcher :kind :root :screenshot argument}
+                         (throw (ex-info usage {})))
+      ("ping" "close" "daemon") (if argument (throw (ex-info usage {}))
+                                 {:mode (keyword command)})
       "--help" {:mode :help}
       (throw (ex-info usage {})))))
 
 (def ^:private root-items
-  (into [{:label "Apps" :icon "󰀻" :action :apps}]
-        (menu/get-menu-items :main)))
+  (search/index-rows
+    (into [{:label "Apps" :icon "󰀻" :action :apps}]
+          (menu/get-menu-items :main))))
+
+(def ^:private root-labels
+  (into {} (map (juxt menu/format-item :shortcut)) root-items))
 
 (defn- menu-view [key]
   (cond
@@ -54,6 +74,7 @@
         :apps "Apps"
         :files "Find files"
         :projects "Projects"
+        :project-add "Add project directory"
         :project (str (fs/file-name path))
         :file (str (fs/file-name path))
         :menu (or (:prompt (if (map? key) key (get menu/menus key))) (some-> key name) "Menu")
@@ -66,32 +87,73 @@
 
 (defn- load-view [{:keys [kind key path] :as view}]
   (case kind
-    :root (let [apps (future (sources/apps))
-                live (future (menu/live-items))
-                menus (future (menu-results :main))]
-            (into (conj (vec @live) (first root-items)) (concat @menus (map #(assoc % :deep true) @apps))))
+    :root (let [live (future (menu/live-items))]
+            (into (conj (vec @live) (first root-items))
+                  (map #(if-let [code (get root-labels (menu/format-item %))]
+                          (assoc % :shortcut code) %))
+                  (menu-results :main)))
     :menu (menu-results key)
-    :apps (sources/apps)
+    :apps (search/rank "" (sources/apps) (disk/read-json (disk/cache "history.json") {} false))
     :projects (sources/projects)
+    :project-add []
     :project (sources/project-actions path)
     :file (sources/file-actions path)
     :tasks (:rows view)
     :dmenu (mapv search/line-row (:lines view))
     []))
 
-(defn- start-view [view]
-  (assoc view
-         :id (str (random-uuid))
-         :query "" :index 0 :page 0 :pinned []
-         :rows (case (:kind view)
-                 :root root-items
-                 :dmenu (load-view view)
-                 :tasks (:rows view)
-                 :secret []
-                 [])
-         :build (when-not (contains? #{:dmenu :secret :tasks :files} (:kind view))
-                  (future (try {:rows (load-view view)}
-                               (catch Exception error {:error (ex-message error)}))))))
+(defn- build-view [view]
+  (try
+    (let [rows (load-view view)]
+      (try (view-cache/save-rows! view rows) (catch Exception _ nil))
+      {:rows (search/index-rows rows)})
+    (catch Exception error {:error (ex-message error)})))
+
+(def ^:dynamic ^:private *frame-signal* nil)
+
+(defn- frame-job [work]
+  (if-let [signal *frame-signal*]
+    (let [result (promise)]
+      {:result result
+       :task (future
+               (deliver result (try (work) (catch Throwable error error)))
+               (when-let [wake @signal] (wake)))})
+    (future (work))))
+
+(defn- job-ready? [job]
+  (realized? (or (:result job) job)))
+
+(defn- job-value [job]
+  (let [result @(or (:result job) job)]
+    (if (instance? Throwable result) (throw result) result)))
+
+(defn- cancel-job! [job]
+  (future-cancel (or (:task job) job)))
+
+(defn- poll-jobs! [ui]
+  (when-not *frame-signal* (cui/wake-in! ui 0.012)))
+
+(defn- start-view [{:keys [kind key] :as view}]
+  (let [usage (when (contains? #{:root :apps} kind)
+                (disk/read-json (disk/cache "history.json") {} false))
+        apps (when (contains? #{:root :apps} kind) (sources/cached-apps))]
+    (assoc view
+           :id (str (random-uuid))
+           :query "" :index 0 :page 0 :pinned []
+           :usage usage
+           :apps (when (= :root kind) apps)
+           :apps-build (when (= :root kind) (frame-job #(hash-map :apps (sources/apps))))
+           :rows (or (view-cache/cached-rows view)
+                     (case kind
+                       :root root-items
+                       :apps (search/index-rows (search/rank "" apps usage))
+                       :menu (search/index-rows (:items (if (map? key) key (get menu/menus key))))
+                       :dmenu (search/index-rows (load-view view))
+                       :tasks (search/index-rows (:rows view))
+                       []))
+           :next-live (+ (System/currentTimeMillis) 2000)
+           :build (when-not (contains? #{:dmenu :secret :tasks :files :project-add} kind)
+                    (frame-job #(build-view view))))))
 
 (defn- command-options [query]
   (when-let [[_ mode command] (re-matches #"(?s)^\s*(>>>|>>|>)\s*(.*)$" query)]
@@ -106,74 +168,96 @@
         calc? (and root? (or (str/starts-with? (str/trim query) "=")
                              (menu/calc-expression query)))]
     (cond
-      files? {:pending (future (try {:rows (sources/files (or root sources/home) query)}
+      (= :project-add kind)
+      {:pending (frame-job #(try {:pinned (sources/project-directories query)}
+                             (catch Exception error {:error (ex-message error)})))
+       :exclusive? true}
+      (= :projects kind) {:pinned (into [] (keep identity) [(sources/direct-add-row query)])}
+      files? {:pending (frame-job #(try {:rows (files/rows root query)}
                                     (catch Exception error {:error (ex-message error)})))}
-      lisp? {:pending (future {:pinned (lisp/rows query)}) :exclusive? true}
+      lisp? {:pending (frame-job #(hash-map :pinned (lisp/rows query))) :exclusive? true}
       (:history? command)
-      {:pending (future
-                  {:pinned (->> (sources/history)
-                                (filter (fn [[text _]]
-                                          (every? #(str/includes? (str/lower-case text) %)
-                                                  (search/tokens (:command command)))))
-                                (take 100)
-                                (mapv (fn [[text dir]] (sources/command-row text dir (:terminal? command)))))})
+      {:pending (frame-job #(hash-map :pinned (commands/history (:command command) (:terminal? command))))
        :exclusive? true}
       command {:exclusive? true
-               :pinned (if (str/blank? (:command command)) []
-                           [(sources/command-row (:command command) nil false)])}
+               :pinned (or (commands/default-rows (:command command)) [])
+               :pending (frame-job #(hash-map :pinned (commands/suggestions (:command command))))}
       calc? {:exclusive? (str/starts-with? (str/trim query) "=")
-             :pending (future
-                        (try {:pinned (menu/calc-provider query)}
-                             (catch Exception error {:error (ex-message error)})))}
+             :pending (frame-job #(try {:pinned (menu/calc-provider query)}
+                                       (catch Exception error {:error (ex-message error)})))}
       :else {})))
 
 (defn- set-query [view query]
-  (when-let [pending (:pending view)] (future-cancel pending))
-  (merge (assoc (dissoc view :pending :exclusive? :error) :query query :index 0 :page 0
+  (doseq [job (keep view [:pending :activation])] (cancel-job! job))
+  (merge (assoc (dissoc view :pending :activation :resolved :exclusive? :error :jump :ranked) :query query :index 0 :page 0
                 :pinned [] :calc nil :lisp nil
                 :rows (if (= :files (:kind view)) [] (:rows view)))
          (search-job view query)))
 
 (defn- collect-job [view key]
   (if-let [job (get view key)]
-    (if (realized? job)
-      (let [result (try @job (catch Exception error {:error (ex-message error)}))]
-        (merge (dissoc view key) result
+    (if (job-ready? job)
+      (let [result (try (job-value job) (catch Exception error {:error (ex-message error)}))
+            result (cond-> result
+                     (and (= :pending key) (contains? result :rows)) (update :rows search/index-rows)
+                     (contains? result :pinned) (update :pinned search/index-rows))]
+        (merge (cond-> (dissoc view key :ranked)
+                 (= :build key) (dissoc :refresh-progress))
+               result
                (when-let [answer (some :calc (:pinned result))] {:calc answer})
                (when-let [answer (some :lisp (:pinned result))] {:lisp answer})))
       view)
     view))
 
-(defn- results [view]
-  (into (:pinned view)
-        (when-not (:exclusive? view) (search/rank (:query view) (:rows view)))))
+(defn- results [{:keys [pinned exclusive? rows query jump usage kind ranked apps]}]
+  (or (:rows jump)
+      ranked
+      (into pinned
+            (when-not exclusive?
+              (let [apps? (and (= :root kind) (seq apps) (not (str/blank? query)))
+                    matches (search/rank query (if apps? (into rows apps) rows) usage)
+                    matches (if (or (str/blank? query) (= :dmenu kind)) matches (vec (take 80 matches)))]
+                (if apps? (search/label-rows matches) matches))))))
 
 (defn- actionable? [row]
-  (or (contains? row :value) (:action row) (:next row) (:fill row)))
+  (or (contains? row :value) (:action row) (:next row) (:fill row) (:cached-id row)))
+
+(defn- row-key [row]
+  (or (:row-id row) (:value row) (when row (menu/format-item row))))
 
 (defn- choose [view row {:keys [control? shift?]}]
   (let [{:keys [kind query]} view
         action (or (when control? (:alt-action row)) (:action row))]
     (cond
       (= :dmenu kind) (let [value (or (when-not control? (:value row)) query)]
-                        {:done true :value (not-empty value)})
+                        {:done true :value (if (:allow-empty? view) value (not-empty value))})
+      (and (= kind :root) control? (nil? (:alt-action row))
+           (not (lisp/query? query)) (not (str/blank? query)) (nil? (command-options query)))
+      {:done true :effect (:action (commands/row (str/trim query) nil
+                                                 (or shift? (commands/terminal? query)) nil))}
       (and (= kind :root) (command-options query) (or control? shift?))
       (let [command (command-options query)
-            text (if control? (:command command) (:label row))]
+            text (if control? (:command command) (:command row))]
         (when-not (str/blank? text)
-          {:done true :effect (:action (sources/command-row
-                                         text (when-not control? (:subtitle row))
-                                         (or shift? (:terminal? command))))}))
+          {:done true :effect (:action (commands/row
+                                         text (when-not control? (:directory row))
+                                         (or shift? (:terminal? command)
+                                             (and control? (not (:history? command)) (commands/terminal? text))) nil))}))
       (:fill row) {:fill (:fill row)}
+      (and (:cached-id row) (or (nil? action) control?)) {:resolve (:cached-id row) :shortcuts {:control? control? :shift? shift?}}
+      (and control? (:file row))
+      {:done true :effect (:action (second (sources/file-actions (:file row))))}
       (:next row) {:open (:next row)}
       (or (menu/menu-item? action) (menu/inline-menu? action)) {:open (menu-view action)}
       action (if (:refresh row)
-               {:done true :effect action :reopen (select-keys view [:key :kind :path :root :prompt])}
+               (when-not (:refresh-progress view)
+                 {:refresh action :destination (:refresh row)
+                  :progress {:view-id (:id view) :row-key (row-key row) :label (:progress row)}})
                {:done true :effect action}))))
 
 (defn- cancel-view! [view]
-  (doseq [job (keep view [:build :pending])]
-    (future-cancel job)))
+  (doseq [job (keep view [:build :pending :live-job :activation :apps-build])]
+    (cancel-job! job)))
 
 (defn- setup-view [{:keys [kind initial-query fixture index] :as definition}]
   (let [definition (if (= kind :menu)
@@ -181,29 +265,32 @@
                      definition)
         view (if fixture
                (assoc definition :id (str (random-uuid)) :query "" :index 0 :page 0 :pinned []
-                      :rows (:rows fixture) :error (:error fixture))
+                      :rows (search/index-rows (:rows fixture)) :error (:error fixture))
                (start-view definition))
         view (cond
                fixture (assoc view :query (or initial-query ""))
-               (or (= :files (:kind view)) (some? initial-query))
+               (or (contains? #{:files :project-add} (:kind view)) (some? initial-query))
                (set-query view (or initial-query ""))
                :else view)]
     (cond-> view (some? index) (assoc :index index))))
 
 (defn- move-index [index rows delta]
-  (let [indexes (vec (keep-indexed (fn [i row] (when (actionable? row) i)) rows))]
-    (if (seq indexes)
-      (let [nearest (or (when (some #{index} indexes) index)
-                        (first (filter #(< index %) indexes))
-                        (first indexes))
-            i (.indexOf ^java.util.List indexes nearest)]
-        (get indexes (mod (+ i delta) (count indexes))))
-      0)))
+  (if (and (zero? delta) (actionable? (get rows index)))
+    index
+    (let [indexes (vec (keep-indexed (fn [i row] (when (actionable? row) i)) rows))]
+      (if (seq indexes)
+        (let [nearest (or (when (some #{index} indexes) index)
+                          (first (filter #(< index %) indexes))
+                          (first indexes))
+              i (.indexOf ^java.util.List indexes nearest)]
+          (get indexes (mod (+ i delta) (count indexes))))
+        0))))
 
 (defn session
   "Create a session controller. Native inputs are owned by the CUI window."
   []
-  {:machine (atom machine/initial) :field (volatile! nil) :had-focus? (volatile! false)})
+  {:machine (atom machine/initial) :field (volatile! nil) :had-focus? (volatile! false)
+   :preview (volatile! nil) :used (volatile! []) :icons (volatile! {})})
 
 (defn status [session]
   (:status @(:machine session)))
@@ -233,20 +320,194 @@
 (defn close-session! [session]
   (show! session {:kind :off}))
 
-(defn- draw-rows! [ui view rows index page size nested?]
-  (let [clicked (volatile! nil)]
-    (doseq [i (range page (min (+ page size) (count rows)))]
-      (let [row (nth rows i)]
-        (when (ui-view/row! ui (str (:id view) "-" i) row (= i index) (boolean (actionable? row)))
+(defn- preview-state! [session ui path]
+  (let [holder (:preview session)
+        {:keys [target job image] :as current} @holder]
+    (cond
+      (not= target path)
+      (do
+        (when job (cancel-job! job))
+        (when image (cui/destroy-texture! ui (:texture image)))
+        (vreset! holder
+                 (when path
+                   {:target path :working? true
+                    :job (frame-job #(preview/load-preview path))}))
+        (when path (poll-jobs! ui)))
+
+      (and job (job-ready? job))
+      (let [{:keys [bytes] :as answer} (try (job-value job) (catch Exception _ {:notice "Preview unavailable"}))]
+        (vreset! holder (assoc (dissoc answer :bytes) :target path
+                               :image (when bytes (cui/load-thumbnail! ui bytes)))))
+
+      (:working? current) (poll-jobs! ui))
+    @holder))
+
+(defn clear-preview! [session ui]
+  (preview-state! session ui nil))
+
+(defn- row-texture! [holder ui path]
+  (if (contains? @holder path)
+    (get @holder path)
+    (let [texture (cui/icon-texture! ui path)]
+      (when (>= (count @holder) 64)
+        (let [[key old] (first @holder)]
+          (when old (cui/destroy-texture! ui old))
+          (vswap! holder dissoc key)))
+      (vswap! holder assoc path texture)
+      texture)))
+
+(defn- render-rows! [session ui view rows first end index width row-height]
+  (let [clicked (volatile! nil)
+        prefix (get-in view [:jump :prefix] "")
+        progress (:refresh-progress view)]
+    (doseq [i (range first end)]
+      (let [row (nth rows i)
+            shortcut (:shortcut row)
+            row (cond-> row
+                  row-height (assoc :row-height row-height)
+                  (and (= (:view-id progress) (:id view)) (= (:row-key progress) (row-key row)))
+                  (assoc :running-progress progress)
+                  (and shortcut (str/starts-with? shortcut prefix))
+                  (assoc :display-shortcut (subs shortcut (count prefix)))
+                  (:app-icon row) (assoc :texture (row-texture! (:icons session) ui (:app-icon row))))
+            previous (get rows (dec i))]
+        (when (and (not row-height) (ui-view/section-start? previous row)) (cui/separator! ui))
+        (when (ui-view/row! ui (str (:id view) "-" i) row (= i index) (boolean (actionable? row)) width)
           (vreset! clicked row))))
-    (ui-view/status! ui view index (count rows) nested?)
     @clicked))
+
+(defn- rows-pane! [session ui view rows index page {:keys [page-size virtual-row-height]} width]
+  (let [count (count rows)]
+    (if-not virtual-row-height
+      (render-rows! session ui view rows 0 count index width nil)
+      (let [height virtual-row-height
+            id (str "visible-" (:id view) "-" (:query view))
+            _ (when (:scroll-selection? view)
+                (panel/scroll-to! ui id (double (* height page))))
+            [first last] (panel/virtual-list! ui id count height (* page-size height))]
+        (try
+          (render-rows! session ui view rows first last index width height)
+          (finally (panel/end-list! ui)))))))
+
+(defn- draw-results! [session ui view rows index page layout width path]
+  (let [preview-width (min 265 (quot width 2))
+        preview (preview-state! session ui path)]
+    (if path
+      (do
+        (panel/begin! ui "file-results" {:row? true :gap 8
+                                         :height (ui-view/preview-body-height layout)})
+        (try
+          (let [clicked (do
+                          (cui/column! ui "results" {:pad 0 :gap 0})
+                          (try (rows-pane! session ui view rows index page layout (- width preview-width 12))
+                               (finally (cui/end! ui))))]
+            (ui-view/file-preview! ui preview-width path preview)
+            clicked)
+          (finally (cui/end! ui))))
+      (rows-pane! session ui view rows index page layout width))))
+
+(defn- inserted-text [old typed caret]
+  (let [length (when typed (- (count typed) (count old)))]
+    (when (and caret length (pos? length) (<= length caret))
+      (let [start (- caret length)]
+        (when (= old (str (subs typed 0 start) (subs typed caret)))
+          {:start start :text (subs typed start caret)})))))
+
+(defn- jump-choice [view rows prefix latched? restore-index]
+  (let [{:keys [exact first]} (search/jump rows prefix)]
+    {:view (cond-> (assoc view :jump {:rows rows :prefix prefix :latched? latched?})
+             (some? first) (assoc :index first))
+     :target (when (some? exact) (nth rows exact))
+     :restore-index restore-index :consumed? true}))
+
+(defn- quick-jump [view typed caret keys {:keys [letter alt? control? jump-cancel?]}]
+  (let [{:keys [query kind jump]} view
+        latched? (:latched? jump)
+        {start :start inserted :text} (inserted-text query typed caret)
+        [_ initial-code] (when inserted (re-matches #";([a-z0-9]*)" inserted))
+        begin? (and (some? initial-code) (not latched?)
+                    (not (and (= :root kind) (or (command-options query) (lisp/query? query)))))]
+    (cond
+      (and jump (or (:escape keys) jump-cancel? (and (:backspace keys) (empty? (:prefix jump)))))
+      {:view (dissoc view :jump) :consumed? true}
+
+      (and jump (:backspace keys))
+      {:view (update-in view [:jump :prefix] #(subs % 0 (dec (count %)))) :consumed? true}
+
+      (and (= inserted ";") latched?) {:view (set-query view typed)}
+
+      begin?
+      (let [rows (results view)]
+        (if (seq rows)
+          (jump-choice view rows initial-code true start)
+          {:view (set-query view typed)}))
+
+      (and (or alt? latched?) (not control?))
+      (let [code (or (when (and latched? inserted (re-matches #"[a-z0-9]+" inserted)) inserted) letter)]
+        (cond
+          code (jump-choice view (or (:rows jump) (results view)) (str (:prefix jump) code)
+                            latched? (when typed (or start (count query))))
+          (and latched? typed) {:view view :restore-index (or start (count query)) :consumed? true}
+          :else {:view view}))
+
+      (and (some? typed) (not= typed query)) {:view (set-query view typed)}
+      :else {:view (if (and jump (not latched?) (not alt?)) (dissoc view :jump) view)})))
+
+(defn- copy-choice [view row]
+  (let [command (when (= :root (:kind view)) (command-options (:query view)))
+        text (or (:file row) (:path (when (= :file (:kind view)) view))
+                 (:command row) (when command (not-empty (:command command))))]
+    (when text
+      {:done true :effect #(sources/copy! text)})))
+
+(defn- complete-choice [view row rows]
+  (if (= :project-add (:kind view))
+    (when-let [directory (or (:directory row) (some :directory rows))]
+      {:fill (str (str/replace directory #"/$" "") "/")})
+    (when-let [{:keys [command]} (when (= :root (:kind view)) (command-options (:query view)))]
+      (when-let [suggestion (or (when (not= command (:command row)) (:command row))
+                                (some #(when (not= command (:command %)) (:command %)) rows))]
+        {:fill (str ">" suggestion (when-not (str/includes? suggestion " ") " "))}))))
+
+(defn- preserve-selection [previous view]
+  (if (and (= (:query previous) (:query view))
+           (or (not (identical? (:rows previous) (:rows view)))
+               (not (identical? (:pinned previous) (:pinned view)))
+               (not (identical? (:apps previous) (:apps view)))))
+    (let [selected (row-key (get (results previous) (:index previous)))
+          index (when selected
+                  (first (keep-indexed (fn [i row] (when (= selected (row-key row)) i))
+                                       (results view))))]
+      (cond-> view (some? index) (assoc :index index)))
+    view))
+
+(defn- update-live [ui view]
+  (if (or (not= :root (:kind view)) (:fixture view))
+    view
+    (let [now (System/currentTimeMillis)
+          job (:live-job view)]
+      (cond
+        (and job (job-ready? job))
+        (let [rows (try (job-value job) (catch Exception _ nil))
+              view (dissoc view :live-job)]
+          (cui/wake-in! ui (max 0.001 (/ (- (:next-live view) now) 1000.0)))
+          (if rows
+            (assoc (dissoc view :ranked) :rows (search/index-rows (into rows (remove :live (:rows view)))))
+            view))
+        (and (nil? job) (not (:build view)) (>= now (:next-live view 0)))
+        (do (poll-jobs! ui)
+            (assoc view :next-live (+ now 2000) :live-job (frame-job menu/live-items)))
+        :else (do (if job (poll-jobs! ui) (cui/wake-in! ui 2.0)) view)))))
 
 (defn draw-frame!
   "Draw an active launcher session and transition it for this frame's input."
-  [{:keys [machine field had-focus?] :as session} ui buffer {:keys [production? preview?]}]
+  [{:keys [machine field had-focus?] :as session} ui buffer {:keys [production? preview? fit?]}]
   (let [model @machine
-        view (-> (machine/current model) (collect-job :build) (collect-job :pending))
+        previous (machine/current model)
+        view (->> (-> previous (collect-job :build) (collect-job :pending)
+                        (collect-job :apps-build) (collect-job :activation))
+                  (update-live ui)
+                  (preserve-selection previous))
         {:keys [kind id query]} view
         secret? (= :secret kind)
         nested? (< 1 (count (:stack model)))
@@ -254,90 +515,230 @@
         _ (when focused? (vreset! had-focus? true))
         dismissed? (and production? @had-focus? (not focused?)
                         (not= "1" (System/getenv "CLONCHER_KEEP_OPEN")))
-        shortcuts (if secret? {} (cui/shortcuts ui))
+        shortcuts (if secret? {} (cui/shortcuts ui (some? (:jump view))))
         keys (cui/take-keys! ui (cond-> #{:escape}
-                                 (not secret?) (into #{:up :down :enter})
-                                 (and nested? (empty? query)) (conj :backspace)))
+                                 (not secret?) (into #{:up :down :enter :tab})
+                                 (or (:jump view) (and nested? (empty? query))) (conj :backspace)))
         field-id (str id "-" (:focus model))]
-    (ui-view/begin! ui preview?)
+    (ui-view/begin! ui preview? fit?)
     (try
-      (let [back? (when nested? (ui-view/back! ui (prompt view)))
-            _ (when (not= @field field-id)
+      (let [_ (when (not= @field field-id)
                 (cui/set-input! buffer query)
                 (vreset! field field-id))
-            {:keys [changed? submitted?]} (cui/field! ui field-id buffer (prompt view) secret?)
+            {:keys [changed? submitted?]} (ui-view/prompt! ui field-id buffer (prompt view) secret?)
             typed (when (and changed? (not secret?)) (cui/input-value buffer))
-            view (if (and (some? typed) (not= typed query)) (set-query view typed) view)
+            caret (when typed (cui/caret ui field-id typed))
+            paired (when (and typed (= :root kind) (or (lisp/query? typed) (lisp/query? query)))
+                     (edit/paired-edit query typed caret))
+            typed (or (:text paired) typed)
+            {:keys [view target restore-index consumed?]} (quick-jump view typed caret keys shortcuts)
+            _ (cond
+                (some? restore-index) (cui/replace-input! ui field-id buffer query restore-index)
+                paired (cui/replace-input! ui field-id buffer (:text paired) (:caret paired)))
             rows (if secret? [] (results view))
-            size (ui-view/page-size ui nested? rows preview?)
+            height (cond
+                     fit? ui-view/preview-height
+                     preview? (min ui-view/preview-height (- (cui/height ui) 108))
+                     :else (cui/height ui))
+            layout (ui-view/result-layout height rows)
+            size (:page-size layout)
             delta (cond
-                    (:down keys) 1
-                    (:up keys) -1
+                    (or (:down keys) (:next? shortcuts)) 1
+                    (or (:up keys) (:previous? shortcuts)) -1
+                    (and (:tab keys) (not= :project-add kind)
+                         (not (and (= :root kind) (command-options (:query view)))))
+                    (if (:shift? shortcuts) -1 1)
                     (:page-down? shortcuts) size
                     (:page-up? shortcuts) (- size)
                     :else 0)
             index (move-index (:index view) rows delta)
             page (* size (quot index size))
-            view (assoc view :index index :page page)
-            clicked (when-not secret? (draw-rows! ui view rows index page size nested?))
+            view (assoc view :index index :page page :ranked (when-not (:jump view) rows)
+                        :scroll-selection? (and (or (not (zero? delta)) consumed?)
+                                                (not= (:page view) page)))
+            width (if preview?
+                    (min ui-view/preview-width (max 1 (- (cui/width ui) 64)))
+                    (cui/width ui))
+            path (when (>= width 500)
+                   (or (:file (get rows index)) (when (= :file kind) (:path view))))
+            clicked (when-not secret?
+                      (let [clicked (draw-results! session ui view rows index page layout width path)]
+                        (when fit? (cui/spacer! ui))
+                        (ui-view/status! ui view (get rows index) (count rows) nested?)
+                        clicked))
+            resolved (:resolved view)
+            view (dissoc view :resolved)
             choice (cond
+                     resolved (choose view (:row resolved) (:shortcuts resolved))
                      (and secret? submitted?)
                      (let [value (cui/input-value buffer)]
                        (when (and (seq value) (not (re-find #"[\r\n\u0000]" value)))
                          {:done true :value value}))
-                     (and changed? (= :root kind) (str/starts-with? (:query view) "/"))
+                     target (some-> (choose (dissoc view :jump) target shortcuts)
+                                    (assoc :used target))
+                     (and (not consumed?) changed? (= :root kind) (str/starts-with? (:query view) "/"))
                      {:open {:kind :files :initial-query (subs (:query view) 1)}}
-                     (and (= :root kind) (:control? shortcuts) (:r? shortcuts))
+                     (and (not consumed?) changed? (= :root kind) (str/starts-with? (:query view) "@"))
+                     {:open {:kind :projects :initial-query (subs (:query view) 1)}}
+                     (and (= :root kind) (:history? shortcuts))
                      (let [{:keys [history? command]} (command-options (:query view))]
                        {:fill (if history? (str ">" command) (str ">>" (or command (:query view))))})
-                     clicked (choose view clicked shortcuts)
-                     (or submitted? (:enter keys)) (choose view (get rows index) shortcuts))]
+                     (:copy? shortcuts) (copy-choice view (get rows index))
+                     (:tab keys) (complete-choice view (get rows index) rows)
+                     clicked (some-> (choose view clicked shortcuts) (assoc :used clicked))
+                     (or submitted? (:enter keys))
+                     (let [row (get rows index)] (some-> (choose view row shortcuts) (assoc :used row))))]
         (transition! session {:event :view :view view})
+        (when (and production? (contains? #{:root :apps} kind) (:used choice))
+          (vswap! (:used session) conj (:used choice)))
         (cond
-          (or dismissed? (and (:escape keys) (not nested?)))
+          (or dismissed? (and (not consumed?) (:escape keys) (not nested?)))
           (transition! session {:event :complete})
-          (or back? (and nested? (or (:backspace keys) (:escape keys))))
+          (and (not consumed?) nested? (or (:backspace keys) (:escape keys)))
           (do (cancel-view! view)
               (transition! session {:event :back})
               (cui/redraw! ui))
+          (:resolve choice)
+          (let [key (or (:key view) :main)
+                id (:resolve choice)]
+            (transition! session {:event :view :view
+                                  (assoc view :activation
+                                         (frame-job #(hash-map :resolved {:row (menu/resolve-row key id)
+                                                                          :shortcuts (:shortcuts choice)})))})
+            (poll-jobs! ui))
           (:open choice)
-          (do (transition! session {:event :push :view (setup-view (:open choice))})
-              (cui/redraw! ui))
+          (do
+            (let [target (:open choice)]
+              (when (and production? (= :project (:kind target)))
+                (future (try (sources/use-project! (:path target)) (catch Exception _ nil))))
+              (transition! session {:event :push :view (setup-view target)}))
+            (cui/redraw! ui))
+          (and production? (:refresh choice))
+          (let [parent? (= :parent (:destination choice))
+                target (if parent? (or (peek (pop (:stack model))) {:kind :projects}) view)
+                action (:refresh choice)
+                job (frame-job
+                      #(try
+                        (menu/execute-action action)
+                        (build-view target)
+                        (catch Exception error {:error (ex-message error)})))]
+            (when-let [build (:build target)] (cancel-job! build))
+            (when parent? (transition! session {:event :back}))
+            (transition! session {:event :view :view
+                                  (assoc (dissoc target :error) :build job :refresh-progress (:progress choice))})
+            (cui/redraw! ui))
+          (:refresh choice)
+          (transition! session {:event :complete})
           (:fill choice)
           (do (transition! session {:event :fill :view (set-query view (:fill choice))})
               (cui/redraw! ui))
           (:done choice) (transition! session {:event :complete :reply choice})
-          (or (:pending view) (:build view)) (cui/wake-in! ui 0.05)))
+          consumed? (cui/redraw! ui)
+          (or (:pending view) (:build view) (:apps-build view) (:activation view)) (poll-jobs! ui))
+        (if secret? ui-view/secret-height (ui-view/window-height layout (some? path))))
       (finally (cui/end! ui)))))
 
-(defn open-window! [{:keys [mode screenshot] :as request}]
+(defn- capture-frame! [ui capture started]
+  (when-let [{:keys [path reply] :as current} @capture]
+    (if (identical? current @started)
+      (when-not (zero? (cui/capture-result))
+        (reset! capture nil)
+        (vreset! started nil)
+        (deliver reply {:exit (if (pos? (cui/capture-result)) 0 1)}))
+      (do (cui/capture! path)
+          (vreset! started current)
+          (cui/redraw! ui)))))
+
+(defn open-window! [{:keys [mode screenshot redraw capture cancelled disconnected? timeout-ms] :as request}]
   (let [session (session)
-        capture-started? (volatile! false)]
-    (show! session (case mode
-                     :launcher request
-                     :dmenu (assoc request :kind :dmenu)
-                     :secret (assoc request :kind :secret)))
+        redraw (or redraw (atom nil))
+        capture (or capture (atom nil))
+        capture-started (volatile! nil)
+        palette (volatile! {:until 0 :colors {}})
+        placement (volatile! nil)
+        initialized? (volatile! false)
+        resize-request (volatile! nil)
+        fit? (not= "1" (p/getenv "CLONCHER_TILING"))
+        deadline (when timeout-ms (+ (System/currentTimeMillis) timeout-ms))
+        width ui-view/preview-width
+        screenshot-reply (when screenshot (promise))]
+    (when (and (= :launcher mode) (nil? (:fd request)))
+      (future (view-cache/prime!)))
+    (when screenshot
+      (reset! capture {:path screenshot :reply screenshot-reply}))
+    (binding [*frame-signal* redraw]
+      (show! session (case mode
+                       :launcher request
+                       :dmenu (assoc request :kind :dmenu)
+                       :secret (assoc request :kind :secret))))
     (try
-      (cui/window! {:width 680 :height (if (= mode :secret) 125 468)}
+      (let [view (machine/current @(:machine session))
+            rows (results view)
+            height (cond
+                     (= mode :secret) ui-view/secret-height
+                     fit? (ui-view/window-height (ui-view/result-layout ui-view/preview-height rows)
+                                                 (or (= :file (:kind view)) (:file (get rows (:index view)))))
+                     :else ui-view/preview-height)]
+        (transition! session {:event :view :view (assoc view :ranked rows)})
+        (cui/window! {:width width :height height :redraw redraw
+                      :app-id (if fit? "cloncher.launcher" "cloncher.launcher.tiled")}
         (fn [ui buffer]
-          (draw-frame! session ui buffer {:production? (nil? screenshot)})
-          (let [{:keys [status] :as model} @(:machine session)]
-            (cond
-              (= :complete status) (cui/quit!)
-              (and screenshot @capture-started?)
-              (case (cui/capture-result)
-                1 (do (transition! session {:event :complete :reply {:done true}}) (cui/quit!))
-                -1 (throw (ex-info "Could not capture the Cloncher window" {}))
-                (cui/redraw! ui))
-              (and screenshot (nil? (:build (machine/current model))))
-              (do (cui/capture! screenshot)
-                  (vreset! capture-started? true)
-                  (cui/redraw! ui))))))
+          (cond
+            (or (and cancelled @cancelled) (and disconnected? (disconnected?))
+                (and deadline (>= (System/currentTimeMillis) deadline)))
+            (cui/quit!)
+            :else
+            (do
+              (when (and fit? (not @initialized?))
+                (cui/allow-compact-window! 360 ui-view/secret-height)
+                (when (and (not screenshot) (not (cui/layer-active?)))
+                  (vreset! placement (future (desktop/place-launcher! (cui/process-id) width))))
+                (vreset! initialized? true))
+              (when deadline (cui/wake-in! ui 1.0))
+              (when (>= (System/currentTimeMillis) (:until @palette))
+                (vreset! palette {:until (+ (System/currentTimeMillis) 1000)
+                                  :colors (palette/load-colors)}))
+              (cui/apply-colors! ui (:colors @palette))
+              (when (seq (:colors @palette)) (cui/wake-in! ui 1.0))
+              (let [desired-height (binding [*frame-signal* redraw]
+                                     (draw-frame! session ui buffer {:production? (nil? screenshot)
+                                                                     :fit? fit?}))
+                    {:keys [status] :as model} @(:machine session)
+                    now (System/currentTimeMillis)
+                    placing? (and @placement (not (realized? @placement)))]
+                (when (and fit? (not= :complete status))
+                  (cond
+                    placing? (cui/wake-in! ui 0.02)
+                    (not= desired-height (:height @resize-request))
+                    (do
+                      (vreset! resize-request {:height desired-height :at now})
+                      (when (not= [width desired-height] [(cui/width ui) (cui/height ui)])
+                        (cui/resize-window! width desired-height)))))
+                (when (and (not= :secret mode)
+                           (or (nil? screenshot) (nil? (:build (machine/current model)))))
+                  (if (or @capture-started (not fit?)
+                          (and (not placing?)
+                               (or (= desired-height (cui/height ui))
+                                   (>= (- now (:at @resize-request now)) 300))))
+                    (capture-frame! ui capture capture-started)
+                    (when @capture (cui/wake-in! ui 0.02))))
+                (cond
+                  (= :complete status) (cui/quit!)
+                  (and screenshot (realized? screenshot-reply))
+                  (do
+                    (transition! session {:event :complete :reply {:done true :status (:exit @screenshot-reply)}})
+                    (cui/quit!))
+                  disconnected? (cui/wake-in! ui 0.2))))))))
       (let [{:keys [stack reply]} @(:machine session)]
-        (when-let [answer (some :calc (reverse stack))] (menu/save-calc! answer))
-        (when-let [answer (some :lisp (reverse stack))] (lisp/save! answer))
-        reply)
-      (finally (close-session! session)))))
+        (when-not (and cancelled @cancelled)
+          (doseq [row @(:used session)]
+            (try (usage/remember! row) (catch Exception _ nil)))
+          (when-let [answer (some :calc (reverse stack))] (menu/save-calc! answer))
+          (when-let [answer (some :lisp (reverse stack))] (lisp/save! answer))
+          reply))
+      (finally
+        (when-let [job (:job @(:preview session))] (cancel-job! job))
+        (close-session! session)))))
 
 (defn- picker! [request]
   (:value (open-window! request)))
@@ -365,31 +766,55 @@
   (with-open [reader (io/reader *in*)]
     (into [] (remove str/blank?) (line-seq reader))))
 
-(defn- perform! [action]
-  (if (= action :cloncher/add-project)
-    (when-let [path (picker! {:mode :dmenu :prompt "Add project directory" :lines []})]
-      (sources/add-project! path))
-    (menu/execute-action action)))
+(defn- run-effect! [effect picker]
+  (when effect
+    (binding [*out* *err* menu/*pick!* picker]
+      (menu/execute-action effect))))
+
+(defn- open-and-finish! [request]
+  (let [{:keys [effect] :as result} (open-window! request)]
+    (run-effect! effect picker!)
+    result))
+
+(defn- daemon-picker! [{:keys [mode prompt lines] :as request}]
+  (:out (socket/request! {:args [(name mode) "-p" prompt]
+                          :lines (or lines []) :env (mapv vec (p/environment))
+                          :options (select-keys request [:allow-empty? :timeout-ms])})))
+
+(defn- daemon-reply [args lines]
+  (let [args (if (and (= "screenshot" (first args)) (second args))
+               ["screenshot" (str (fs/absolutize (second args)))]
+               args)]
+    (socket/request! {:args (vec args) :lines lines :env (mapv vec (p/environment))})))
 
 (defn run [args]
   (let [{:keys [mode path] :as request} (parse-args args)]
     (case mode
       :help (do (println usage) 0)
       :project-add (do (sources/add-project! path) 0)
-      (do
-        (load-cui!)
-        (let [request (cond-> request (= :dmenu mode) (assoc :lines (stdio-lines)))]
-          (loop [request request]
-            (let [{:keys [value effect reopen done]} (open-window! request)]
-              (if (contains? #{:dmenu :secret} mode)
+      :ping (or (:exit (daemon-reply args [])) 1)
+      :close (or (:exit (daemon-reply args [])) 0)
+      :control (or (:exit (daemon-reply args [])) 3)
+      :daemon (do (load-cui!)
+                  (future (view-cache/prime!))
+                  (future (sources/apps))
+                  (or (daemon/serve! parse-args open-window!
+                                     (fn [{:keys [effect]}] (run-effect! effect daemon-picker!)))
+                      0))
+      (let [lines (when (= :dmenu mode) (stdio-lines))
+            remote (when-not (or (:screenshot request) (System/getenv "LAUNCHER_STANDALONE"))
+                     (daemon-reply args (or lines [])))]
+        (if remote
+          (do (when-some [value (:out remote)] (println value)) (:exit remote))
+          (do
+            (load-cui!)
+            (let [{:keys [value done status]} (open-and-finish! (assoc request :lines lines))]
+              (cond
+                status status
+                (contains? #{:dmenu :secret} mode)
                 (if (some? value) (do (println value) 0) 1)
-                (do
-                  (when effect
-                    (binding [*out* *err* menu/*pick!* picker!]
-                      (perform! effect)))
-                  (if reopen
-                    (recur (assoc reopen :mode :launcher))
-                    (if (and (:screenshot request) (not done)) 1 0)))))))))))
+                (and (:screenshot request) (not done)) 1
+                :else 0))))))))
 
 (defn -main [& args]
   (System/exit

@@ -1,0 +1,90 @@
+(ns cloncher.parity-test
+  (:require [clojure.test :refer [deftest is run-tests]]
+            [cloncher.commands :as commands]
+            [cloncher.edit :as edit]
+            [cloncher.files :as files]
+            [cloncher.lisp :as lisp]
+            [cloncher.machine :as machine]
+            [cloncher.main :as app]
+            [cloncher.menu :as menu]
+            [cloncher.palette :as palette]
+            [cloncher.search :as search]
+            [cloncher.sources :as sources]
+            [cloncher.view :as view]))
+
+(deftest compatible-commands
+  (is (= {:mode :project-add :path "."} (app/parse-args ["projects" "add"])))
+  (is (= {:mode :project-add :path "/tmp"} (app/parse-args ["project-add" "/tmp"])))
+  (is (= {:mode :control} (app/parse-args ["screenshot" "/tmp/panel.png"])))
+  (is (= {:mode :secret :prompt "Wi-Fi"} (app/parse-args ["secret" "-p" "Wi-Fi"]))))
+
+(deftest picker-rows-and-quick-jump
+  (let [line "👩‍✈️  pilot\ttravel · people"
+        row (search/line-row line)]
+    (is (= line (:value row)))
+    (is (= "👩‍✈️" (:icon row)))
+    (is (= "travel · people" (:subtitle row)))
+    (is (= "󰀻" (:icon (search/line-row "󰀻 App")))))
+  (let [rows (search/label-rows (mapv #(hash-map :label (str %)) (range 110)))
+        codes (mapv :shortcut rows)]
+    (is (= ["aaa" "aas" "aad"] (subvec codes 0 3)))
+    (is (= (count rows) (count (distinct codes))))
+    (is (= 1 (:exact (search/jump rows "aas"))))))
+
+(deftest ranked-file-snapshot
+  (let [index (files/parse-snapshot
+                (str "4\tCode/lib/bindings.clj\u0000"
+                     "2\tDownloads/binding.clj\u0000"
+                     "3\tCode/.config/bindings.edn\u0000"
+                     "10\t../escape\u0000"
+                     "8\t/absolute\u0000"
+                     "1\tCode/app.clj\u0000"))]
+    (is (= ["Downloads/binding.clj" "Code/lib/bindings.clj" "Code/app.clj"]
+           (files/rank index "" true)))
+    (is (= ["Code/lib/bindings.clj"] (files/rank index "lib bindings" true)))
+    (is (= ["Code/.config/bindings.edn"] (files/rank index ".conf bindings" true)))
+    (is (= ["Downloads/binding.clj" "Code/lib/bindings.clj"] (files/rank index "binding.clj" true)))))
+
+(deftest shell-histories-and-expressions
+  (is (= ["echo first\necho second" "pwd"]
+         (sources/parse-histfile ": 100:0;echo first\\\necho second\n: 110:0;pwd")))
+  (is (= {"j" "alias → jolt" "build" "function"}
+         (commands/parse-zshrc "alias j='jolt'\nbuild() {\n  echo ignored\n}")))
+  (is (= {:text "(λ [])" :caret 4} (edit/paired-edit "(λ )" "(λ [)" 4)))
+  (is (= {:text "()" :caret 1} (edit/paired-edit "(())" "())" 1)))
+  (is (= [3 4] (lisp/evaluate "(->> [1 2 3] (filter #(> % 1)) (map inc))")))
+  (is (thrown? Exception (lisp/evaluate "(slurp \"/tmp/value\")"))))
+
+(deftest palette-and-view-actions
+  (let [colors (palette/parse-css "@define-color terminal_background #122334;")]
+    (is (= [18 35 52 255 0] (get colors 1))))
+  (is (= "Emacs config"
+         (:label (menu/resolve-row :main "󱁻  Emacs config\tSystem › Edit config"))))
+  (let [root {:kind :root}
+        open (machine/transition machine/initial {:event :open :view root})
+        nested (machine/transition open {:event :push :view {:kind :apps}})
+        back (machine/transition nested {:event :back})
+        complete (machine/transition back {:event :complete :reply {:done true}})
+        off (machine/transition complete {:event :off})]
+    (is (= root (machine/current back)))
+    (is (= 3 (:focus back)))
+    (is (= :off (:status off)))
+    (is (empty? (:stack off)))
+    (is (nil? (:reply off)))))
+
+(deftest window-height-follows-results
+  (let [two-rows [{:label "One"} {:label "Two"}]
+        short (view/result-layout 520 two-rows)
+        mixed (view/result-layout 520 [{:label "App" :app? true :live true}
+                                       {:label "Emoji" :icon "😀"}])
+        full (view/result-layout 520 (repeat 80 {:label "Result"}))]
+    (is (= 62 (:height (view/result-layout 520 []))))
+    (is (= {:page-size 2 :height 110} short))
+    (is (= 134 (:height mixed)))
+    (is (= {:page-size 19 :height 518 :virtual-row-height 24} full))
+    (is (= 340 (view/window-height short true)))
+    (is (= 518 (view/window-height full true)))))
+
+(defn -main [& _]
+  (let [{:keys [fail error]} (run-tests 'cloncher.parity-test)]
+    (System/exit (if (zero? (+ fail error)) 0 1))))

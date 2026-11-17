@@ -2,10 +2,12 @@
   "Desktop entries, files, projects and shell history."
   (:refer-clojure :exclude [run!])
   (:require [babashka.fs :as fs]
-            [babashka.process :as p]
+            [cloncher.process :as p]
             [clojure.edn :as edn]
             [clojure.string :as str]
             [cloncher.json :as json]
+            [cloncher.icons :as icons]
+            [cloncher.persistence :as disk]
             [cloncher.search :as search]))
 
 (def home (str (fs/home)))
@@ -26,9 +28,9 @@
                      (let [[k v] (str/split line #"=" 2)]
                        (when v [k v])))) lines)))
 
-(defn- visible-app [path]
+(defn- visible-app [path resolve-icon]
   (let [entry (desktop-entry path)
-        desktops (set (str/split (or (System/getenv "XDG_CURRENT_DESKTOP") "") #":"))
+        desktops (set (str/split (or (p/getenv "XDG_CURRENT_DESKTOP") "") #":"))
         listed? (fn [s] (some desktops (str/split (or s "") #";")))
         desktop (str (fs/file-name path))]
     (when (and (= "Application" (entry "Type")) (seq (entry "Name"))
@@ -36,14 +38,15 @@
                (or (not (seq (entry "OnlyShowIn"))) (listed? (entry "OnlyShowIn")))
                (not (listed? (entry "NotShowIn")))
                (or (not (seq (entry "TryExec"))) (fs/which (entry "TryExec"))))
-      {:label (entry "Name") :icon "󰀻" :subtitle (or (entry "GenericName") (entry "Comment"))
-       :row-id (str "app:" desktop)
+      {:label (entry "Name") :icon "󰀻"
+       :row-id (str "app:" desktop) :app? true
+       :search (str/join " " (keep entry ["Exec" "GenericName" "Comment" "Keywords"]))
+       :app-icon (resolve-icon (entry "Icon"))
        :action #(run! "gio" "launch" (str path))})))
 
-(defn apps []
-  (let [dirs (cons (str (fs/xdg-data-home))
-                   (str/split (or (System/getenv "XDG_DATA_DIRS") "/usr/local/share:/usr/share") #":"))]
-    (->> dirs
+(defn- load-apps []
+  (let [resolve-icon (icons/resolver)]
+    (->> (icons/data-dirs)
          (mapcat (fn [dir]
                    (let [base (fs/path dir "applications")]
                      (when (fs/directory? base)
@@ -52,39 +55,29 @@
          (reduce (fn [by-id [id path]]
                    (if (contains? by-id id) by-id (assoc by-id id path))) {})
          vals
-         (keep (fn [path] (try (visible-app path) (catch Exception _ nil))))
+         (keep (fn [path] (try (visible-app path resolve-icon) (catch Exception _ nil))))
          (sort-by (comp str/lower-case :label))
          vec)))
 
-(def ^:private file-exclusions
-  [".git" ".cache" "node_modules" "target" ".direnv" ".venv" ".local/share/Trash"
-   ".password-store" ".gnupg" ".ssh" ".local/share/containers" ".local/share/opencode"
-   ".local/share/pnpm" ".local/share/Steam" ".local/share/uv" ".local/share/postgres"
-   ".local/share/umu" ".bun/install/cache" ".cargo/registry" ".cargo/git"
-   "go/pkg/mod" ".pub-cache" ".zoom" ".config/Notion/Partitions" "kernel-venv"
-   "__pycache__" "Cache" "Code Cache" "GPUCache" ".npm/_cacache" ".gradle/caches"
-   ".local/share/lutris"])
+(def ^:private app-catalogs (atom {}))
 
-(defn- escaped-regex [s]
-  (str/escape s (zipmap "\\.*+?()[]{}^$|" (map #(str "\\" %) "\\.*+?()[]{}^$|"))))
+(defn- app-catalog-key []
+  (mapv p/getenv ["HOME" "XDG_CURRENT_DESKTOP" "XDG_DATA_HOME" "XDG_DATA_DIRS"
+                  "XDG_CONFIG_HOME" "PATH"]))
 
-(defn files [root query]
-  (let [longest (last (sort-by count (search/tokens query)))
-        pattern (if (seq longest) (str/join ".*" (map (comp escaped-regex str) longest)) ".")
-        argv (into ["timeout" "4" "fd" "--type" "f" "--hidden" "--ignore-case"
-                    "--full-path" "--print0" "--max-results" "1600" "--base-directory" root]
-                   (concat (mapcat #(vector "--exclude" %) file-exclusions) ["--" pattern]))
-        {:keys [exit out err]} (apply p/sh {:continue true} argv)]
-    (when-not (contains? #{0 124} exit)
-      (throw (ex-info (str "File search failed: " (str/trim err)) {})))
-    (into []
-          (comp (remove str/blank?)
-                (map (fn [relative]
-                       (let [path (str (fs/path root relative))]
-                         {:label (str (fs/file-name path)) :icon "󰈔"
-                          :subtitle (str (fs/parent relative))
-                          :row-id path :hint "actions" :next {:kind :file :path path}}))))
-          (str/split out #"\u0000"))))
+(defn cached-apps []
+  (get-in @app-catalogs [(app-catalog-key) :rows]))
+
+(defn apps []
+  (let [key (app-catalog-key)]
+    (locking app-catalogs
+      (let [{:keys [stamp rows]} (get @app-catalogs key)
+            now (System/currentTimeMillis)]
+        (if (and rows (< (- now stamp) 60000))
+          rows
+          (let [rows (search/prepare-rows (load-apps))]
+            (swap! app-catalogs #(into {key {:stamp now :rows rows}} (take 3 (dissoc % key))))
+            rows))))))
 
 (defn- elisp [form]
   (run! "emacsclient" "--no-wait" "--reuse-frame" "--alternate-editor=false" "--eval" form))
@@ -95,25 +88,32 @@
       (run! "emacsclient" "--no-wait" "--reuse-frame" "--alternate-editor=false" "--" path)
       (run! "xdg-open" path))))
 
+(defn copy! [text]
+  @(p/process {:in text :out :discard :err :discard} "wl-copy"))
+
 (defn file-actions [path]
   (cond-> [{:label "Open" :icon "󰈔" :shortcut "o" :action #(open-file! path)}
            {:label "Reveal in Dired" :icon "󰉋" :shortcut "r"
             :action #(elisp (str "(progn (dired " (pr-str (str (fs/parent path)))
                                  ") (dired-goto-file " (pr-str path) ") (recenter))"))}
-           {:label "Copy path" :icon "󰆏" :shortcut "c"
-            :action #(deref (p/process {:in path :out :discard :err :discard} "wl-copy"))}]
+           {:label "Copy path" :icon "󰆏" :shortcut "c" :action #(copy! path)}]
     (re-find #"(?i)\.(m4a|mp3|mp4|mkv|mov|webm|wav|flac|ogg|opus|aac|avi)$" path)
     (conj {:label "Transcribe" :icon "󰍬"
            :action #(run! (str dotfiles "/bin/menu/wf_recorder.clj") "transcribe" "--file" path)})))
 
 (defn- project-file []
-  (or (System/getenv "LAUNCHER_PROJECTS_FILE") (str home "/.emacs.d/projects")))
+  (or (p/getenv "LAUNCHER_PROJECTS_FILE") (str (p/getenv "HOME") "/.emacs.d/projects")))
 
 (defn- project-state []
-  (str (fs/path (or (System/getenv "XDG_STATE_HOME") (str home "/.local/state")) "launcher" "projects.json")))
+  (str (fs/path (or (p/getenv "XDG_STATE_HOME") (str (p/getenv "HOME") "/.local/state")) "launcher" "projects.json")))
 
 (defn- project-root [path]
-  (str (fs/normalize (fs/expand-home path))))
+  (str (fs/normalize
+         (cond
+           (= "~" path) (fs/path (p/getenv "HOME"))
+           (str/starts-with? path "~/") (fs/path (p/getenv "HOME") (subs path 2))
+           (fs/absolute? path) (fs/path path)
+           :else (fs/path (or (p/getenv "PWD") (System/getProperty "user.dir")) path)))))
 
 (defn- project-records []
   (->> (some-> (read-if-present (project-state)) (json/parse-string true) :projects)
@@ -129,19 +129,23 @@
     (run! "timeout" "6" "emacsclient" "--alternate-editor=false" "--eval"
           (str "(progn (require 'project) " form ")"))))
 
+(def ^:private project-lock (Object.))
+
+(defn- update-project! [path transform]
+  (locking project-lock
+    (let [records (project-records)
+          updated (update records path #(transform (or % {:root path})))]
+      (disk/write-json! (project-state) {:projects (vec (vals updated))}))))
+
+(defn use-project! [path]
+  (update-project! path #(assoc % :used (quot (System/currentTimeMillis) 1000))))
+
 (defn- pin-project! [path]
-  (let [registry (project-state)
-        parent (fs/parent registry)
-        configured (project-records)
-        row (get configured path {:root path})
-        updated (assoc configured path (update row :pinned not))]
-    (fs/create-dirs parent)
-    (let [temporary (fs/create-temp-file {:dir parent :prefix "cloncher-projects-"})]
-      (try
-        (fs/set-posix-file-permissions temporary "rw-------")
-        (spit (str temporary) (json/generate-string {:projects (vec (vals updated))}))
-        (fs/move temporary registry {:replace-existing true :atomic-move true})
-        (finally (when (fs/exists? temporary) (fs/delete temporary)))))))
+  (update-project! path #(update % :pinned not)))
+
+(defn- forget-project! [path]
+  (remember-project! :forget path)
+  (update-project! path #(assoc % :forgotten true)))
 
 (defn projects []
   (let [records (project-records)
@@ -157,13 +161,43 @@
                                                           (fs/file-name path))
                                     :subtitle path :row-id path :hint "actions"
                                     :next {:kind :project :path path}})))]
-    (conj list {:label "Add project…" :icon "󰐕" :action :cloncher/add-project})))
+    (conj list {:label "Add project…" :icon "󰐕" :next {:kind :project-add}})))
 
 (defn add-project! [typed]
   (let [path (project-root typed)]
     (when-not (and (fs/absolute? path) (fs/directory? path))
       (throw (ex-info "Choose an existing absolute directory" {})))
-    (remember-project! :add path)))
+    (remember-project! :add path)
+    (update-project! path #(assoc % :forgotten false :used (quot (System/currentTimeMillis) 1000)))))
+
+(defn direct-add-row [query]
+  (let [query (str/trim query)]
+    (when (or (= "~" query) (str/starts-with? query "~/") (fs/absolute? query))
+      (let [directory (project-root query)]
+        {:label "Add directory as project" :subtitle directory :icon "󰐕"
+         :next {:kind :project-add :initial-query query}}))))
+
+(defn project-directories [query]
+  (let [query (str/trim query)]
+    (when-not (or (str/blank? query) (= "~" query) (str/starts-with? query "~/") (fs/absolute? query))
+      (throw (ex-info "Enter ~ or an absolute directory path" {})))
+    (let [path (project-root (if (str/blank? query) "~" query))
+          directory? (fs/directory? path)
+          parent (if directory? path (fs/parent path))
+          fragment (if directory? "" (str (fs/file-name path)))
+          results (->> (fs/list-dir parent)
+                       (filter fs/directory?)
+                       (filter #(or (str/starts-with? fragment ".")
+                                    (not (str/starts-with? (str (fs/file-name %)) "."))))
+                       (mapv (fn [directory]
+                               {:label (str (fs/file-name directory)) :subtitle (str directory)
+                                :icon "󰉋" :directory (str directory)
+                                :fill (str (str/replace (str directory) #"/$" "") "/")})))]
+      (into (if directory?
+              [{:label "Add directory as project" :subtitle path :icon "󰐕"
+                :action #(add-project! path) :refresh :parent}]
+              [])
+            (take 79 (search/rank fragment (sort-by :label results)))))))
 
 (defn- project-elisp [path body]
   (elisp (str "(progn (require 'project) (let ((default-directory (file-name-as-directory "
@@ -194,10 +228,23 @@
                                      [(str task) (when (map? body) (:doc body))])))
                            (sort-by first)))
            (when just-file
-             (let [{:keys [out]} (p/sh {:dir path :continue true} "timeout" "2" "just" "--summary")]
-               (task-view path "Just recipes" "j" ["just"] (map #(vector % nil) (search/tokens out)))))
+             (let [{:keys [out exit]} (p/sh {:dir path :continue true} "timeout" "5" "just"
+                                           "--justfile" just-file "--no-dotenv" "--dump" "--dump-format" "json")
+                   recipes (when (zero? exit) (get (json/parse-string out false) "recipes"))
+                   tasks (->> recipes
+                              (keep (fn [[name recipe]]
+                                      (when-not (or (str/starts-with? name "_") (get recipe "private")
+                                                    (some #(or (= "private" %) (and (map? %) (contains? % "private")))
+                                                          (get recipe "attributes")))
+                                        (let [params (keep #(get % "name") (get recipe "parameters"))
+                                              detail (str/join " · " (remove str/blank?
+                                                                           [(get recipe "doc")
+                                                                            (when (seq params) (str "args: " (str/join " " params)))]))]
+                                          [name detail]))))
+                              (sort-by first))]
+               (task-view path "Just recipes" "j" ["just" "--justfile" just-file "--"] tasks)))
            (when make-file
-             (task-view path "Make targets" "m" ["make"]
+             (task-view path "Make targets" "m" ["make" "-f" make-file "--"]
                         (->> (slurp (str (fs/path path make-file)))
                              (re-seq #"(?m)^([a-zA-Z0-9_][a-zA-Z0-9_.-]*):[^=]")
                              (map second) distinct (map #(vector % nil)))))])))
@@ -215,25 +262,36 @@
            {:label (if pinned? "Unpin project" "Pin project") :shortcut "p" :icon "󰉋"
             :refresh true :action #(pin-project! path)}
            {:label "Forget project" :shortcut "x" :icon "󰉋"
-            :action #(remember-project! :forget path)}]
+            :refresh :parent :action #(forget-project! path)}]
           (try (project-tasks path) (catch Exception _ nil)))))
 
-(def ^:private terminal-programs
-  #{"btop" "htop" "top" "man" "less" "vim" "nvim" "nano" "tmux" "ssh" "sudo"
-    "nix-shell" "yazi" "lazygit" "jolt" "bb" "clojure"})
-
 (defn run-command! [command directory terminal?]
-  (let [dir (if (and directory (fs/directory? directory)) directory home)
-        program (first (str/split (str/trim command) #"\s+" 2))
+  (let [dir (if (and directory (fs/directory? directory)) directory (p/getenv "HOME"))
         helper (str dotfiles "/bin/menu/run-command")
         args (cond
-               (or terminal? (terminal-programs program))
+               terminal?
                ["kitty" "--directory" dir "zsh" "-ic" (str command "; exec zsh")]
 
                (fs/executable? helper) [helper command]
-               :else ["zsh" "-ic" command])]
+               :else ["zsh" "-ic" command])
+        excluded #{"INVOCATION_ID" "JOURNAL_STREAM" "SYSTEMD_EXEC_PID" "MANAGERPID"
+                     "NOTIFY_SOCKET" "LISTEN_PID" "LISTEN_FDS" "LISTEN_FDNAMES"
+                     "WATCHDOG_PID" "WATCHDOG_USEC" "PWD" "OLDPWD" "SHLVL" "_"}
+          environment (for [[key value] (p/environment)
+                            :when (and (not (excluded key)) (re-matches #"[A-Za-z_][A-Za-z0-9_]*" key))]
+                        (str "--setenv=" key "=" value))]
     (apply run! "systemd-run" "--user" "--collect" "--quiet" "--expand-environment=no"
-           (str "--working-directory=" dir) "--" args)))
+           (str "--working-directory=" dir) (concat environment ["--"] args))))
+
+(defn parse-histfile [text]
+  (let [[entries pending]
+        (reduce (fn [[entries pending] line]
+                  (let [line (if (empty? pending) (str/replace line #"^: \d+:\d+;" "") line)]
+                    (if (str/ends-with? line "\\")
+                      [entries (str pending (subs line 0 (dec (count line))) "\n")]
+                      [(conj entries (str pending line)) ""])))
+                [[] ""] (str/split-lines text))]
+    (cond-> entries (seq pending) (conj pending))))
 
 (defn history []
   (let [out (try
@@ -249,11 +307,10 @@
                      (str/split out #"\u0000"))
                (->> (or (read-if-present (str home "/.histfile"))
                         (read-if-present (str home "/.zsh_history")) "")
-                    str/split-lines reverse (take 1000)
-                    (map #(vector (str/replace % #"^: \d+:\d+;" "") nil))))]
-    (->> rows (remove (comp str/blank? first)) (distinct) vec)))
-
-(defn command-row [command directory terminal?]
-  {:icon "󰆍" :label command :subtitle directory :hint (if terminal? "terminal" "run")
-   :row-id (str "command:" directory ":" command)
-   :action #(run-command! command directory terminal?)})
+                    parse-histfile reverse (map #(vector % nil))))]
+    (loop [seen #{} rows (seq rows) output []]
+      (if-let [[command :as entry] (first rows)]
+        (if (or (seen command) (str/blank? command))
+          (recur seen (next rows) output)
+          (recur (conj seen command) (next rows) (conj output entry)))
+        output))))

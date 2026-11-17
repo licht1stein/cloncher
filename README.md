@@ -30,13 +30,37 @@ jolt eval desktop --ns user -e '(cloncher.dev/screenshot!)'
 jolt prod
 jolt prod menu connect
 jolt prod projects
+jolt prod projects add ~/Code/my-project
 jolt prod files
-printf '%s\n' Alpha Beta | jolt prod dmenu -p "Choose a line"
-jolt prod secret -p "Password"
+printf '%s\n' Alpha Beta | bin/cloncher dmenu -p "Choose a line"
+bin/cloncher secret -p "Password"
 ```
 
-For a keybinding or a script, invoke `bin/cloncher` by absolute path. Production opens one launcher window and exits on dismissal or completion. Use arrows or Page Up and Page Down to navigate, Enter to select, and Escape to go back or dismiss. At the root, use `/` for files, `=` for calculator history or expressions, `>` for shell commands, and Ctrl+R for shell history.
+Invoke `bin/cloncher` by absolute path from desktop keybindings and picker scripts. It uses the release binary when present. Set `CLONCHER_SOURCE=1` to run the checkout's source. Arrow keys, Tab, Page Up and Page Down, and the result scrollbar navigate the list. Use Enter or click a row to select it. Type `;` followed by a displayed label, or hold Alt while typing it. Backspace in an empty query returns to the previous view. Escape dismisses or backs out of a nested view.
 
-Cloncher uses the CUI host library from the Jolt/Polylith template. Set `CLONCHER_CUI_LIBRARY` to an existing `libcui_host.so` or run `bin/build-cui /path/to/jolt-poly-template` to build it with Nix. The launcher also discovers the library in the usual sibling template checkout. `jolt release` builds a native launcher and places the CUI library beside it in `target/`.
+At the root, `/` enters file search, `@` opens projects, `=` opens calculator history, and `(` starts a restricted desktop Lisp expression. `>` starts a shell command. `>>` browses history in Kitty and `>>>` browses history for background execution. Ctrl+R toggles command history. Ctrl+C copies the selected command or file path. Tab completes commands and project directories.
 
-The CUI host uses a regular native window. The original launcher’s resident GTK layer-shell service and its live keybindings remain separate. Some existing dotfiles helpers still call the original launcher path for their own pickers.
+The daemon accepts one active request and uses a private Unix socket. It propagates the client's environment to menu actions. The control commands work from another terminal.
+
+```sh
+bin/cloncher daemon
+bin/cloncher ping
+bin/cloncher screenshot /tmp/cloncher.png
+bin/cloncher close
+```
+
+`LAUNCHER_STANDALONE=1` forces a new standalone window. `bin/cloncher --screenshot PATH` opens, captures, and closes a root window. The daemon's `screenshot` command captures an already open window and refuses secret sessions.
+
+The panel reads Noctalia's `~/.config/launcher/colors.css` and resolves app icons through the desktop entry and XDG icon directories. File and document previews use the site's local tools for raster, video, and PDF decoding. CUI draws the preview and the rest of the panel.
+
+## Build and verify
+
+Set `CLONCHER_CUI_LIBRARY` to an existing `libcui_host.so`, or run `bin/build-cui /path/to/jolt-poly-template` to build it with Nix. Cloncher also discovers the library in the usual sibling template checkout.
+
+```sh
+jolt -M:test
+jolt release
+./target/cloncher
+```
+
+On compositors that support Wayland layer-shell, production opens as an overlay centered 140 points from the top of the active output. Other desktops use an ordinary window. The development host opens as a tiled window. Set `CLONCHER_TILING=1` to use an ordinary production window as well.
