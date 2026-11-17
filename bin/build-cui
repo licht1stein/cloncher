@@ -13,11 +13,17 @@ backend=$(cd "$template" && nix-build --no-out-link --argstr adapter "$project/n
       base = import ./nix/native.nix { inherit pkgs; };
       header = builtins.path { path = /. + "${adapter}/launcher-layer.h"; };
       source = builtins.path { path = /. + "${adapter}/launcher-layer.c"; };
-  in base.overrideAttrs (old: {
+      warm = builtins.path { path = /. + "${adapter}/launcher-warm.inc"; };
+      warmPatch = builtins.path { path = /. + "${adapter}/launcher-warm.patch"; };
+  in base.overrideAttrs (old: let
+    host = builtins.elemAt (builtins.elemAt
+      (builtins.split "(/[^[:space:]]+/cui_host[.]c)" old.buildPhase) 1) 0;
+  in {
     buildInputs = old.buildInputs ++ [ pkgs.wayland ];
-    buildPhase = builtins.replaceStrings
-      [ "-c src/platform/cui_app_sdl3.c" "src/platform/cui_app.c src/platform/cui_dialogs.c" "sdl3 librsvg-2.0" ]
-      [ "-include ${header} -c src/platform/cui_app_sdl3.c"
+    buildPhase = "cp ${host} cloncher-host.c\nchmod u+w cloncher-host.c\ncp ${warm} launcher-warm.inc\npatch -p0 < ${warmPatch}\n" + builtins.replaceStrings
+      [ host "-c src/platform/cui_app_sdl3.c" "src/platform/cui_app.c src/platform/cui_dialogs.c" "sdl3 librsvg-2.0" ]
+      [ "-I${builtins.dirOf host} ./cloncher-host.c"
+        "-include ${header} -c src/platform/cui_app_sdl3.c"
         "src/platform/cui_app.c src/platform/cui_dialogs.c ${source}"
         "sdl3 wayland-client librsvg-2.0" ]
       old.buildPhase;

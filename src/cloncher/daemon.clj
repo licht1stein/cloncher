@@ -66,7 +66,7 @@
 
 (defn serve!
   "Keep accepting requests while the main thread owns the current CUI window."
-  [parse open! finish!]
+  [parse open! finish! prepare!]
   (if-let [listener (socket/listen! (socket/path))]
     (let [queue (java.util.concurrent.LinkedBlockingQueue.)
           active (atom nil)
@@ -77,6 +77,7 @@
                          (recur))))]
       (try
         (loop []
+          (when (.isEmpty queue) (prepare!))
           (let [{:keys [fd reply env cancelled] :as job} (.take queue)]
             (if @cancelled
               (deliver reply {:exit 1})

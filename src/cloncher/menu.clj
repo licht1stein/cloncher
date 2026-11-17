@@ -5,7 +5,9 @@
             [clojure.string :as str]
             [clojure.java.io :as io]
             [clojure.edn :as edn]
+            [cloncher.config :as config]
             [cloncher.json :as json]
+            [cloncher.search :as search]
             [cloncher.desktop :as desktop-repl]))
 
 (defn kitty
@@ -23,174 +25,6 @@
                   (remove nil?)
                   (str/join " "))]
     (format "niri msg action spawn -- kitty %s sh -c '%s'" opts script)))
-
-(declare get-bluetooth-items
-         get-claude-items
-         get-connect-items
-         get-focus-items
-         get-keybindings-menu
-         get-look-items
-         get-mail-auth-items
-         get-mail-code-items
-         get-main-menu-items
-         get-power-profile-items
-         get-record-menu-items
-         get-sound-items
-         get-tailscale-menu-items
-         get-wifi-items
-         install-aur-action
-         rename-workspace
-         scan-bluetooth!
-         scan-wifi!)
-
-(def menus
-  {:main {:prompt "Menu"
-          :items-fn (fn [] (get-main-menu-items))}
-
-   ;; Mod+Space's first row. The launcher owns the app list: this view has
-   ;; no menu rows of its own.
-   :apps {:prompt "Apps"
-          :items []}
-
-   ;; File discovery belongs to the launcher.
-   :files {:prompt "Files" :items []}
-
-   :windows {:prompt "Windows"
-             :items-fn desktop-repl/window-items}
-
-   :mail {:prompt "Mail"
-          :items [{:icon "󰧫" :label "Compose email" :action "emacsclient -c -n -e '(mu4e-compose-new)'"}
-                  {:icon "󰇰" :label "Open inbox" :action "my niri launch --title '^[*]?mu4e' emacs emacsclient -c -F '((name . \"mu4e\"))' -e '(mu4e)'"}
-                  {:icon "󰇚" :label "Check mail now" :subtitle "fetch and triage"
-                   ;; Its own transient unit: the check waits for both services
-                   ;; and menu.clj must not hang on it. A second press while one
-                   ;; runs fails on the unit name instead of doubling up.
-                   :action "systemd-run --user --collect --quiet --unit=mail-check ~/dotfiles/bin/menu/sync_status.clj mail-check"}
-                  {:icon "󰌋" :label "Authorize an account" :subtitle "re-login after a password change" :action :mail-auth}
-                  {:icon "󰌆" :label "Codes & links" :action :mail-codes}]}
-
-   :mail-codes {:prompt "Codes & links"
-                :items-fn (fn [] (get-mail-code-items))}
-
-   :mail-auth {:prompt "Authorize mail"
-               :items-fn (fn [] (get-mail-auth-items))}
-
-   :screen {:prompt "Screen"
-            :items [{:icon "󰹑" :label "Screenshot region" :action "~/dotfiles/bin/menu/screenshot region"}
-                    {:icon "󰖯" :label "Screenshot window" :action "~/dotfiles/bin/menu/screenshot window"}
-                    {:icon "󰍹" :label "Screenshot screen" :action "~/dotfiles/bin/menu/screenshot screen"}
-                    {:icon "󰕧" :label "Record" :action :record}
-                    {:icon "󰐌" :label "Cast clipboard URL" :action "~/dotfiles/bin/menu/cast.clj clipboard"}
-                    {:icon "󰐌" :label "Cast a file" :action "~/dotfiles/bin/menu/cast.clj cast"}
-                    {:icon "󰍺" :label "Mirror screen to TV" :action "~/dotfiles/bin/menu/cast.clj mirror"}
-                    {:icon "󰍺" :label "TV as extra screen" :action "~/dotfiles/bin/menu/cast.clj extend"}]}
-
-   :insert {:prompt "Insert"
-            :items [{:icon "󰞅" :label "Emoji" :action "~/dotfiles/bin/menu/emoji.clj"}
-                    {:icon "󰅍" :label "Snippet" :action "~/dotfiles/bin/snippy.clj"}
-                    {:icon "󰨸" :label "Clipboard history" :action "noctalia msg panel-toggle clipboard"}]}
-
-   :connect {:prompt "Connect"
-             :items-fn (fn [] (get-connect-items))}
-
-   :wifi {:prompt "Wi-Fi networks"
-          :items-fn (fn [] (get-wifi-items))}
-
-   :bluetooth {:prompt "Bluetooth devices"
-               :items-fn (fn [] (get-bluetooth-items))}
-
-   :look {:prompt "Look"
-          :items-fn (fn [] (get-look-items))}
-
-   :focus {:prompt "Focus"
-           :items-fn (fn [] (get-focus-items))}
-
-   :system {:prompt "System"
-            :items [{:icon "󰏔" :label "Packages" :action :install}
-                    {:icon "󰒋" :label "Services" :action (kitty "sysz")}
-                    {:icon "󰾅" :label "Power profile" :action :power-profile}
-                    {:icon "󰚩" :label "Claude accounts" :action :claude}
-                    {:icon "󰌌" :label "Keybindings" :action :keybindings}
-                    {:icon "󰑕" :label "Rename workspace" :action (fn [] (rename-workspace))}
-                    {:icon "󱁻" :label "Edit config" :action :config}]}
-
-   :sound {:prompt "Sound"
-           :items-fn (fn [] (get-sound-items))}
-
-   :power-profile {:prompt "Power profile"
-                   :items-fn (fn [] (get-power-profile-items))}
-
-   :claude {:prompt "Claude accounts"
-            :items-fn (fn [] (get-claude-items))}
-
-   :keybindings {:prompt "Keybindings"
-                 :items-fn (fn [] (get-keybindings-menu))}
-
-
-   :tailscale {:prompt "Tailscale"
-               :items-fn (fn [] (get-tailscale-menu-items))}
-
-   ;; Noctalia's built-in session actions (`noctalia msg session <action>`),
-   ;; in the order and with the labels of its own session panel.
-   :power {:prompt "Power"
-           :items [{:icon "󰌾" :label "Lock" :action "noctalia msg session lock"}
-                   ;; Suspend always locks first: an unlocked sleeping laptop
-                   ;; is never what is wanted, so there is no bare suspend.
-                   {:icon "󰤄" :label "Suspend" :subtitle "lock & sleep"
-                    :action "noctalia msg session lock-and-suspend"}
-                   {:icon "󰍃" :label "Log Out" :action "noctalia msg session logout"}
-                   {:icon "󰜉" :label "Reboot" :action "noctalia msg session reboot"}
-                   {:icon "󰐥" :label "Shut Down" :action "noctalia msg session shutdown"}]}
-
-
-   ;; Native project.el picker: Rust owns its rows, actions, and navigation.
-   :projects {:prompt "Projects" :native true}
-
-   :record {:prompt "Record"
-            :items-fn (fn [] (get-record-menu-items))}
-
-   :install
-   {:prompt "Packages"
-    :items [{:icon "󰏖" :label "Package" :subtitle "filter by repository"
-             :action (kitty "~/dotfiles/bin/menu/pkg.clj install --repo"
-                            :class "pkg" :title "Install")}
-            {:icon "󰣇" :label "AUR" :action (fn [] (install-aur-action))}
-            {:icon "󰆴" :label "Remove"
-             :action (kitty "~/dotfiles/bin/menu/pkg.clj remove"
-                            :class "pkg" :title "Install")}
-            {:icon "󰚰" :label "Update"
-             :action (kitty "~/dotfiles/bin/menu/pkg.clj update"
-                            :class "pkg" :title "Install")}]}
-
-   :config
-   {:prompt "Edit config"
-    :items [{:icon "󱁻" :label "Emacs config" :action "emacsclient -c ~/dotfiles/emacs/.emacs.d/config.org"}
-            {:icon "󰌌" :label "Niri keybinds" :action "emacsclient -c ~/dotfiles/niri/.config/niri/mybinds.kdl"}
-            {:icon "󰖯" :label "Niri config" :action "emacsclient -c ~/dotfiles/niri/.config/niri/config.kdl"}
-            {:icon "󱁻" :label "Noctalia config" :action "emacsclient -c ~/dotfiles/noctalia/.config/noctalia/config.toml"}
-            {:icon "󰍜" :label "Launcher menu" :action "emacsclient -c ~/dotfiles/bin/menu/menu.clj"}
-            {:icon "󰘮" :label "Noctalia settings" :action "noctalia msg settings-open"}
-            {:icon "󰚩" :label "Ask Claude in dotfiles" :action (kitty "cd ~/dotfiles; claude")}]}
-
-   :sync
-   {:prompt "Sync & Backup"
-    :items [{:icon "󱞒" :label "Syncthing" :action "~/dotfiles/bin/menu/sync_status.clj syncthing-open"}
-            {:icon "󰏤" :label "Pause Syncthing" :action "~/dotfiles/bin/menu/sync_status.clj syncthing-pause"}
-            {:icon "󰐊" :label "Resume Syncthing" :action "~/dotfiles/bin/menu/sync_status.clj syncthing-resume"}
-            {:icon "󰅧" :label "Start Nextcloud" :action "~/dotfiles/bin/menu/sync_status.clj nextcloud-start"}
-            {:icon "󰁯" :label "Back up now" :action "~/dotfiles/bin/menu/sync_status.clj backup-now"}
-            {:icon "󰋚" :label "Backup snapshots" :action (kitty "my backup snapshots" :wait? true)}]}
-
-   :notes
-   {:prompt "Notes"
-    :items [{:icon "" :section 1 :label "Scratchpad" :action "emacsclient -c -e '(find-file-point-max (user-data \"scratchpad.org\"))'"}
-            {:icon "" :section 1 :label "Freewriting" :action "emacsclient -c -e '(find-file-point-max (user-data \"free.org\"))'"}
-            {:icon "" :section 1 :label "Journal" :action "emacsclient -c ~/Documents/journal.org"}
-            {:icon "" :section 1 :label "New Note" :action "emacsclient -c -e '(denote)'"}
-            {:icon "󰹕" :section 1 :label "List Notes" :action "emacsclient -c -e \"(denote-menu-list-notes)\""}
-            {:icon "󰅍" :section 1 :label "Edit snippets" :action "emacsclient -c ~/.config/snippy/"}
-            {:icon "󰐊" :section 2 :label "Open work.org" :action "emacsclient -c ~/Documents/work.org"}
-            {:icon "󰇮" :section 2 :label "Open inbox.org" :action "emacsclient -c ~/Documents/inbox.org"}]}})
 
 ;; Debug mode: set to true to see picker output in terminal
 (def debug? (= (System/getenv "DEBUG") "1"))
@@ -572,24 +406,6 @@
             {:icon "󰁔" :label (str "Switch to " label) :hint "switch"
              :action #(switch-tailnet tn)}))))
 
-(defn get-main-menu-items
-  "The main menu, grouped by what you want to do. What is running right now
-  is not here: `live-items` puts it above Apps in the root view."
-  []
-  [{:icon "󰖯" :label "Windows" :action :windows}
-   {:icon "󰃖" :label "Projects" :action :projects}
-   {:icon "󰏪" :label "Notes" :action :notes}
-   {:icon "󰇮" :label "Mail" :action :mail}
-   {:icon "󰹑" :label "Screen" :action :screen}
-   {:icon "󰕾" :label "Sound" :action :sound}
-   {:icon "󰞅" :label "Insert" :action :insert}
-   {:icon "󰖩" :label "Connect" :action :connect}
-   {:icon "󰘿" :label "Sync & Backup" :action :sync}
-   {:icon "󰏘" :label "Look" :action :look}
-   {:icon "󰂛" :label "Focus" :action :focus}
-   {:icon "󰒓" :label "System" :action :system}
-   {:icon "󰐥" :label "Power" :action :power}])
-
 (defn- noctalia-on?
   "Whether `noctalia msg <cmd>` (a *-status command) reports on."
   [cmd]
@@ -885,12 +701,8 @@
             :label (str "Wi-Fi: " (if on? "On" "Off"))
             :subtitle (if on? "on" "off") :warn (not on?)
             :hint (if on? "turn off" "turn on") :refresh true
-            :action "noctalia msg wifi-toggle"}
-           {:icon "󰑓" :section 2 :label "Scan Wi-Fi networks" :hint "scan and refresh"
-            :refresh true :progress "Scanning Wi-Fi networks…" :action (fn [] (scan-wifi!))}
-           {:icon "󰒓" :section 2 :label "Wi-Fi settings"
-            :subtitle "hidden networks · advanced settings"
-            :action "noctalia msg panel-open control-center network"}]))))
+            :action "noctalia msg wifi-toggle"}]))))
+
 (defn- bluetooth-inventory [out]
   (let [objects (-> (json/parse-string out) (get "data") first)]
     (when-not (map? objects)
@@ -943,11 +755,7 @@
             [{:icon "󰂯" :volatile true
               :label (cond (nil? inventory) "Could not read Bluetooth devices"
                            (not on?) "Turn on Bluetooth to discover devices"
-                           :else "No Bluetooth devices — scan to discover")}])
-          [{:icon "󰑓" :label "Scan Bluetooth devices" :hint "scan for 8 seconds and refresh"
-            :refresh true :progress "Scanning Bluetooth devices…" :action (fn [] (scan-bluetooth!))}
-           {:icon "󰒓" :label "Bluetooth settings" :subtitle "advanced settings · remove devices"
-            :action "noctalia msg panel-open control-center bluetooth"}]))))
+                           :else "No Bluetooth devices — scan to discover")}])))))
 
 (defn get-connect-items
   "Enter lists networks/devices in the launcher; Ctrl+Enter toggles the radio."
@@ -968,22 +776,10 @@
                                               @tailnet "Off"))
       :action :tailscale}]))
 
-(defn get-look-items
-  "The ambient widget's switches (`get-themes-menu`), then the wallpaper."
-  []
-  (into (get-themes-menu)
-        [{:icon "󰸉" :label "Next wallpaper" :action "noctalia msg wallpaper-next"}
-         {:icon "󰒝" :label "Random wallpaper" :action "noctalia msg wallpaper-random"}
-         {:icon "󰋩" :label "Browse wallpapers" :action "noctalia msg panel-toggle wallpaper"}
-         {:icon "󰖔" :label "Night light" :subtitle "toggle" :action "noctalia msg nightlight-force-toggle"}]))
-
 (defn get-focus-items []
-  (into [(get-dnd-menu-item)
-         {:icon "󰅶" :label (str "Caffeine: " (if (caffeine-on?) "On" "Off")) :subtitle "keep awake"
-          :action "noctalia msg caffeine-toggle"}
-         {:icon "󰥔" :label "Remind me" :subtitle "timer / reminder" :action remind-me-action}
-         {:icon "󰒲" :label "Sleep in" :action sleep-in-action}]
-        (active-timer-items)))
+  [(get-dnd-menu-item)
+   {:icon "󰅶" :label (str "Caffeine: " (if (caffeine-on?) "On" "Off")) :subtitle "keep awake"
+    :action "noctalia msg caffeine-toggle"}])
 
 (def mail-triage-path (str (fs/home) "/dotfiles/bin/ai/jobs/mail_triage.clj"))
 
@@ -1214,24 +1010,159 @@
   [action]
   (and (map? action) (string? (:prompt action)) (vector? (:items action))))
 
+(def ^:private providers
+  {:windows/list desktop-repl/window-items
+   :mail/codes get-mail-code-items :mail/accounts get-mail-auth-items
+   :connect/status get-connect-items :wifi/networks get-wifi-items
+   :bluetooth/devices get-bluetooth-items :appearance/themes get-themes-menu
+   :focus/status get-focus-items :timers/active active-timer-items
+   :sound/devices get-sound-items :power/profiles get-power-profile-items
+   :claude/accounts get-claude-items :keys/bindings get-keybindings-menu
+   :tailscale/networks get-tailscale-menu-items :record/status get-record-menu-items})
+
+(def ^:private built-in-actions
+  {:workspace/rename rename-workspace :packages/aur install-aur-action
+   :wifi/scan scan-wifi! :bluetooth/scan scan-bluetooth!
+   :timers/remind remind-me-action :timers/sleep sleep-in-action
+   :config/edit #(p/sh "emacsclient" "-c" (str (config/path)))})
+
+(defn- command-args [argv]
+  (mapv #(if (str/starts-with? % "~/")
+           (str (or (p/getenv "HOME") (fs/home)) (subs % 1))
+           %) argv))
+
+(defn- run-terminal! [{:keys [exec shell title class wait?]}]
+  (let [argv (if shell ["sh" "-c" shell] (command-args exec))
+        argv (if wait? (into ["sh" "-c" "\"$@\"; printf 'Press enter to close...'; read -r _" "cloncher"]
+                             argv)
+                 argv)]
+    (apply p/sh (concat ["niri" "msg" "action" "spawn" "--" "kitty" "-o" "shell=zsh"]
+                        (when class ["--class" class])
+                        (when title ["--title" title])
+                        argv))))
+
+(defn- argv? [value]
+  (and (vector? value) (seq value) (every? string? value) (not (str/blank? (first value)))))
+
+(defn- compile-action [menus action]
+  (when (and (map? action) (= 1 (count action)))
+    (let [[type value] (first action)]
+      (case type
+        :menu (when (contains? menus value) value)
+        :call (get built-in-actions value)
+        :exec (when (argv? value) #(apply p/sh (command-args value)))
+        :shell (when (and (string? value) (not (str/blank? value))) #(p/sh "sh" "-c" value))
+        :terminal (when (and (map? value)
+                             (not= (contains? value :exec) (contains? value :shell))
+                             (if (contains? value :exec)
+                               (argv? (:exec value))
+                               (and (string? (:shell value)) (not (str/blank? (:shell value)))))
+                             (every? string? (vals (select-keys value [:class :title])))
+                             (or (not (contains? value :wait?)) (boolean? (:wait? value))))
+                    #(run-terminal! value))
+        nil))))
+
+(defn- compile-item [menus menu item]
+  (let [invalid #(throw (ex-info (str "Invalid " % " in menu " menu) {:menu menu :item item}))]
+    (cond
+      (not (map? item)) (invalid "item")
+      (contains? item :provider)
+      (if (and (= 1 (count item)) (contains? providers (:provider item)))
+        item
+        (invalid "provider"))
+      (or (not (string? (:label item))) (str/blank? (:label item))) (invalid "label")
+      (not (every? string? (vals (select-keys item [:icon :subtitle :hint :alt-hint :search :shortcut :progress]))))
+      (invalid "text field")
+      (not (every? integer? (vals (select-keys item [:section :order])))) (invalid "row order")
+      (and (contains? item :id) (not (or (keyword? (:id item))
+                                        (and (string? (:id item)) (not (str/blank? (:id item)))))))
+      (invalid "item ID")
+      (and (contains? item :refresh) (not (contains? #{:current :parent true false} (:refresh item))))
+      (invalid "refresh destination")
+      :else
+      (reduce (fn [row key]
+                (if (contains? item key)
+                  (assoc row key (or (compile-action menus (get item key)) (invalid (name key))))
+                  row))
+              (cond-> (dissoc item :id)
+                (:id item) (assoc :row-id (str (:id item))))
+              [:action :alt-action]))))
+
+(defn- compile-configuration [text]
+  (let [{:keys [menus]} (config/read-config text)]
+    (when-not (and (map? menus) (contains? menus :main))
+      (throw (ex-info "Expected a :menus map containing :main" {})))
+    (let [menus (into {} (map (fn [[key menu]]
+                                (when-not (and (keyword? key) (nil? (namespace key))
+                                               (map? menu) (string? (:prompt menu)) (vector? (:items menu)))
+                                  (throw (ex-info (str "Invalid menu " key) {:menu key})))
+                                [key (update menu :items #(mapv (partial compile-item menus key) %))])) menus)
+          root-items (search/index-rows (remove :provider (get-in menus [:main :items])))]
+      {:menus menus :root-items root-items :revision (str (hash text))})))
+
+(def ^:private defaults (delay (compile-configuration config/default-text)))
+(defonce ^:private configuration-files (atom {}))
+(def ^:dynamic *configuration* nil)
+
+(defn configuration []
+  (or *configuration* @defaults))
+
+(defn load-configuration!
+  "Return one validated snapshot. File I/O takes place at session startup or on explicit reload."
+  []
+  (let [path (config/path)]
+    (locking configuration-files
+      (let [previous (get @configuration-files path)
+            snapshot (or (:snapshot previous) @defaults)]
+        (try
+          (config/setup! path)
+          (let [stamp [(str (fs/last-modified-time path)) (fs/size path)]]
+            (if (= stamp (:stamp previous))
+              snapshot
+              (let [updated (try
+                              (let [text (slurp (str path))]
+                                (if (= text config/default-text) @defaults (compile-configuration text)))
+                              (catch Exception error
+                                (binding [*out* *err*]
+                                  (println "Cloncher config" (str path) (ex-message error)))
+                                snapshot))]
+                (swap! configuration-files assoc path {:stamp stamp :snapshot updated})
+                updated)))
+          (catch Exception error
+            (binding [*out* *err*]
+              (println "Cloncher config" (str path) (ex-message error)))
+            snapshot))))))
+
+(defn definition [key]
+  (if (inline-menu? key) key (get-in (configuration) [:menus key])))
+
+(defn static-items [key]
+  (into [] (remove #(or (:provider %) (:root-only? %))) (:items (definition key))))
+
 (defn get-menu-items
-  "Get items for a menu, handling both :items and :items-fn."
-  [menu-key]
-  (let [menu (if (inline-menu? menu-key) menu-key (get menus menu-key))]
-    (if-let [items-fn (:items-fn menu)]
-      (cond
-        (fn? items-fn) (items-fn)
-        :else (throw (ex-info "Invalid items-fn" {:items-fn items-fn})))
-      (:items menu))))
+  "Expand configured providers in place among static items."
+  ([menu-key] (get-menu-items menu-key false))
+  ([menu-key root?]
+   (into [] (comp (remove #(and (not root?) (:root-only? %)))
+                 (mapcat (fn [item]
+                           (if-let [provider (get providers (:provider item))]
+                             (try (provider)
+                                  (catch Exception error
+                                    (when debug? (println "Provider" (:provider item) (ex-message error)))
+                                    []))
+                             [item]))))
+         (:items (definition menu-key)))))
+
 (defn safe-menu-items
   "Items of a menu, or [] when building them throws. A submenu whose backing
   command or config file is missing must not take its parent menu down."
-  [menu-key]
-  (try
-    (get-menu-items menu-key)
-    (catch Exception e
-      (when debug? (println "Menu" menu-key "failed:" (ex-message e)))
-      [])))
+  ([menu-key] (safe-menu-items menu-key false))
+  ([menu-key root?]
+   (try
+     (get-menu-items menu-key root?)
+     (catch Exception e
+       (when debug? (println "Menu" menu-key "failed:" (ex-message e)))
+       []))))
 
 (defn format-item
   "Format a menu item as one picker row: its glyph, its label, then a TAB
@@ -1259,16 +1190,11 @@
 (defn menu-item?
   "Check if action is a menu keyword."
   [action]
-  (and (keyword? action) (contains? menus action)))
+  (and (keyword? action) (some? (definition action))))
 
 (def ^:private path-sep
   "Separator between the ancestor labels of a flattened submenu row."
   " › ")
-
-(def ^:private opaque-menus
-  "Menus `menu-rows` never folds in: keybindings are reference material,
-  and Projects is owned by the native Rust picker."
-  #{:keybindings :projects})
 
 (defn menu-rows
   "Every row under a menu, flattened: its own items, followed by the items of
@@ -1284,9 +1210,10 @@
   Nested rows that do nothing (headers, status lines) are dropped, submenus
   are expanded in parallel because most items-fn shell out, and `seen` stops
   a menu that points back at an ancestor from looping."
-  ([menu-key] (menu-rows menu-key "" #{menu-key}))
-  ([menu-key path seen]
-   (let [items (safe-menu-items menu-key)
+  ([menu-key] (menu-rows menu-key false))
+  ([menu-key root?] (menu-rows menu-key "" #{menu-key} root?))
+  ([menu-key path seen root?]
+   (let [items (safe-menu-items menu-key root?)
          own (mapv (fn [item]
                      (cond-> item
                        (seq path) (assoc :path path)))
@@ -1294,7 +1221,7 @@
          expand? (fn [{:keys [action]}]
                    (and (menu-item? action)
                         (not (contains? seen action))
-                        (not (contains? opaque-menus action))))
+                        (not= false (:searchable? (definition action)))))
          nested (->> items
                      (filter expand?)
                      (mapv (fn [{:keys [action label]}]
@@ -1302,7 +1229,7 @@
                                                 (if (seq path)
                                                   (str path path-sep label)
                                                   label)
-                                                (conj seen action)))))
+                                                (conj seen action) false))))
                      (mapcat deref)
                      (filter :action))]
      (into own nested))))
@@ -1315,7 +1242,7 @@
     (or (menu-item? action) (inline-menu? action))
     (loop []
       (let [items (safe-menu-items action)
-            selection (show-menu (:prompt (if (inline-menu? action) action (get menus action))) (map format-item items))]
+            selection (show-menu (:prompt (definition action)) (map format-item items))]
         (when-some [item (find-menu-item items selection)]
           (execute-action (:action item))
           (when (:refresh item) (recur)))))
@@ -1463,15 +1390,16 @@
 
 (defn resolve-row
   "Resolve a cached row ID by following the item’s current submenu path."
-  [key id]
-  (let [path (second (str/split id #"\t" 2))
-        parents (when (seq path) (str/split path #" › "))
-        target (reduce (fn [target parent-label]
-                         (or (some (fn [{:keys [label action]}]
-                                     (when (and (= label parent-label) (menu-item? action)) action))
-                                   (safe-menu-items target))
-                             (reduced nil)))
-                       key parents)]
-    (when target
-      (some #(when (= id (format-item (cond-> % (seq path) (assoc :path path)))) %)
-            (safe-menu-items target)))))
+  ([key id] (resolve-row key id false))
+  ([key id root?]
+   (let [path (second (str/split id #"\t" 2))
+         parents (when (seq path) (str/split path #" › "))
+         target (reduce (fn [target parent-label]
+                          (or (some (fn [{:keys [label action]}]
+                                      (when (and (= label parent-label) (menu-item? action)) action))
+                                    (safe-menu-items target (and root? (= target key))))
+                              (reduced nil)))
+                        key parents)]
+     (when target
+       (some #(when (= id (format-item (cond-> % (seq path) (assoc :path path)))) %)
+             (safe-menu-items target (and root? (empty? parents))))))))

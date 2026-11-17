@@ -3,7 +3,12 @@ set -eu
 
 project=$(dirname "$(realpath "$0")")/..
 export CLONCHER_ROOT="$project"
-if [ "${CLONCHER_SOURCE:-0}" != 1 ] && [ -x "$project/target/cloncher" ]; then
-  exec "$project/target/cloncher" "$@"
+if [ "${CLONCHER_SOURCE:-0}" != 1 ]; then
+  if [ -x "$project/target/cloncher-client" ] && [ -x "$project/target/cloncher" ]; then
+    exec "$project/target/cloncher-client" "$@"
+  fi
+  if [ -x "$project/target/cloncher" ]; then
+    exec "$project/target/cloncher" "$@"
+  fi
 fi
-exec jolt -Srepro -Scp "$project/src" -m cloncher.main "$@"
+exec jolt -Srepro -Scp "$project/src:$project/resources" -m cloncher.main "$@"

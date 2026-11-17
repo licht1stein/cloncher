@@ -3,6 +3,7 @@
   (:require [babashka.fs :as fs]
             [cloncher.cui :as cui]
             [cloncher.main :as app]
+            [cloncher.menu :as menu]
             [cloncher.palette :as palette]
             [cloncher.view :as view]
             [jolt.nrepl :as nrepl]))
@@ -11,24 +12,32 @@
 (defonce ^:private redraw (atom nil))
 (defonce ^:private session (app/session))
 (defonce ^:private reload-lock (Object.))
+(defonce ^:private configuration (atom nil))
 
 (defn state [] (app/state session))
 
 (defn redraw! []
   (when-let [wake @redraw] (wake)))
 
+(defn reload-config!
+  "Load the current EDN config and refresh the open preview on its frame thread."
+  []
+  (reset! configuration (menu/load-configuration!))
+  (swap! control assoc :reconfigure true)
+  (redraw!))
+
 (defn reload!
   "Reload presentation and session code in the running window."
   []
   (locking reload-lock
-    (doseq [namespace '[cloncher.json cloncher.process cloncher.persistence cloncher.socket cloncher.daemon
+    (doseq [namespace '[cloncher.json cloncher.process cloncher.config cloncher.persistence cloncher.socket cloncher.daemon
                         cloncher.cui cloncher.panel cloncher.palette cloncher.search cloncher.icons
                         cloncher.desktop cloncher.menu cloncher.sources cloncher.commands
                         cloncher.files cloncher.preview cloncher.edit cloncher.lisp
                         cloncher.machine cloncher.usage cloncher.view-cache cloncher.view
                         cloncher.main cloncher.dev]]
       (require namespace :reload)))
-  (redraw!))
+  (reload-config!))
 
 (def ^:private view-kinds
   #{:off :root :apps :menu :files :file :projects :project :project-add :tasks :dmenu :secret})
@@ -100,11 +109,11 @@
   (cui/column! ui id {:height 0 :pad 0 :gap 0})
   (cui/end! ui))
 
-(defn render!
-  "Render the development host and the shared launcher panel inside it."
+(defn- render-preview!
   [ui buffer]
-  (let [{:keys [open]} (first (swap-vals! control dissoc :open))
-        _ (when open (open-preview! ui buffer open))
+  (let [{:keys [open reconfigure]} (first (swap-vals! control dissoc :open :reconfigure))
+        _ (cond open (open-preview! ui buffer open)
+                reconfigure (app/reconfigure! session))
         off? (= :off (app/status session))
         width (max 1 (min (+ view/preview-width 48) (- (cui/width ui) 16)))]
     (cui/bar! ui "development-window")
@@ -127,14 +136,22 @@
       (finally (cui/end! ui))))
   (screenshot-frame! ui))
 
+(defn render!
+  "Render the development host and the shared launcher panel inside it."
+  [ui buffer]
+  (binding [menu/*configuration* @configuration]
+    (render-preview! ui buffer)))
+
 (defn -main [& args]
   (let [request (if (= ["off"] (vec args)) {:kind :off :mode :launcher} (app/parse-args args))]
     (when-not (contains? #{:launcher :dmenu :secret} (:mode request))
       (throw (ex-info "jolt dev accepts off or a launcher view such as apps or menu connect" {})))
     (app/load-cui!)
-    (app/show! session (cond-> request
-                         (contains? #{:dmenu :secret} (:mode request))
-                         (assoc :kind (:mode request))))
+    (reset! configuration (menu/load-configuration!))
+    (binding [menu/*configuration* @configuration]
+      (app/show! session (cond-> request
+                           (contains? #{:dmenu :secret} (:mode request))
+                           (assoc :kind (:mode request)))))
     (let [stop (nrepl/start 0 [] {:port-file ".nrepl-port"})]
       (println (str "Cloncher Dev nREPL on 127.0.0.1:" (:port (meta stop))))
       (flush)

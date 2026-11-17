@@ -1,4 +1,4 @@
-{:paths ["src"]
+{:paths ["src" "resources"]
  :aliases {:app {:main-opts ["-m" "cloncher.main"]}
            :cli {:extra-paths ["bin"]}
            :prod {:main-opts ["-m" "cloncher.main"]}

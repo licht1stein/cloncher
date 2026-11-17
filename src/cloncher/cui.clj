@@ -16,6 +16,11 @@
 (ffi/defcfn ^:private native-window "cui_app_native_window" [:pointer] :pointer)
 (ffi/defcfn ^:private sdl-minimum-size! "SDL_SetWindowMinimumSize" [:pointer :int :int] :bool)
 (ffi/defcfn ^:private layer-active* "cloncher_layer_active" [] :bool)
+(ffi/defcfn ^:private prepare-launcher* "cloncher_prepare_launcher" [:int :int] :void :blocking)
+(ffi/defcfn ^:private use-prepared-launcher* "cloncher_use_prepared_launcher" [] :void)
+
+(defn prepare-launcher! [width height]
+  (try (prepare-launcher* width height) (catch Exception _ nil)))
 
 (defn layer-active? []
   (try (layer-active*) (catch Exception _ false)))
@@ -212,7 +217,7 @@
 
 (defn window!
   "Open a CUI window on the calling thread and release all native resources before returning."
-  [{:keys [width height title redraw app-id]} render!]
+  [{:keys [width height title redraw app-id prepared?]} render!]
   (let [buffer (ffi/alloc capacity)]
     (try
       (set-input! buffer "")
@@ -235,6 +240,8 @@
           (when redraw
             (reset! redraw #(locking waker-lock
                               (when @attached? (wake-window! waker)))))
+          (when prepared?
+            (try (use-prepared-launcher*) (catch Exception _ nil)))
           (let [status (run-app title app-id ffi/null width height callback ffi/null waker)]
             (when-let [error @failure] (throw error))
             (when-not (zero? status)

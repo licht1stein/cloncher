@@ -8,7 +8,7 @@
 
 (defn transition
   "Apply a launcher event. Views carry prepared rows or pending jobs supplied by the host."
-  [{:keys [status stack] :as state} {:keys [event view reply]}]
+  [{:keys [status stack] :as state} {:keys [event view reply views]}]
   (case event
     :open (-> state (assoc :status :on :stack [view]) (dissoc :reply) (update :focus inc))
     :off (-> state (assoc :status :off :stack []) (dissoc :reply))
@@ -17,6 +17,7 @@
     :back (if (and (= :on status) (< 1 (count stack)))
             (-> state (update :stack pop) (update :focus inc)) state)
     :view (if (= :on status) (assoc state :stack (conj (pop stack) view)) state)
+    :reconfigure (if (= :on status) (-> state (assoc :stack views) (update :focus inc)) state)
     :fill (if (= :on status)
             (-> state (assoc :stack (conj (pop stack) view)) (update :focus inc)) state)
     (throw (ex-info "Unknown launcher event" {:event event}))))

@@ -39,14 +39,19 @@ enum {
 
 struct launcher_layer {
     SDL_Window *window;
+    struct wl_display *display;
+    struct wl_surface *surface;
     struct wl_proxy *role;
     struct wl_proxy *shell;
     bool configured;
 };
 
 static struct launcher_layer layer;
+static bool defer_layer;
 
 bool cloncher_layer_active(void) { return layer.role != NULL; }
+bool cloncher_layer_ready(void) { return layer.shell != NULL; }
+void cloncher_defer_layer(bool defer) { defer_layer = defer; }
 
 static void registry_global(void *data, struct wl_registry *registry, uint32_t name,
                             const char *interface, uint32_t version)
@@ -96,6 +101,24 @@ static void clear_role(void)
     layer = (struct launcher_layer){0};
 }
 
+bool cloncher_attach_layer(int width, int height)
+{
+    if (!layer.shell || !layer.surface || layer.role)
+        return false;
+    layer.role = wl_proxy_marshal_flags(layer.shell, 0, &layer_surface_interface, 1, 0,
+                                        NULL, layer.surface, NULL, LAYER_OVERLAY, "launcher");
+    if (!layer.role)
+        return false;
+    wl_proxy_add_listener(layer.role, (void (**)(void))&layer_listener, &layer);
+    wl_proxy_marshal_flags(layer.role, SET_SIZE, NULL, 1, 0, (uint32_t)width, (uint32_t)height);
+    wl_proxy_marshal_flags(layer.role, SET_ANCHOR, NULL, 1, 0, ANCHOR_TOP);
+    wl_proxy_marshal_flags(layer.role, SET_MARGIN, NULL, 1, 0, 140, 0, 0, 0);
+    wl_proxy_marshal_flags(layer.role, SET_EXCLUSIVE_ZONE, NULL, 1, 0, -1);
+    wl_proxy_marshal_flags(layer.role, SET_KEYBOARD_INTERACTIVITY, NULL, 1, 0, KEYBOARD_EXCLUSIVE);
+    wl_surface_commit(layer.surface);
+    return wl_display_roundtrip(layer.display) >= 0 && layer.configured;
+}
+
 SDL_Window *cloncher_create_window(const char *title, int width, int height, SDL_WindowFlags flags)
 {
     const char *app_id = SDL_GetHint(SDL_HINT_APP_ID);
@@ -125,19 +148,11 @@ SDL_Window *cloncher_create_window(const char *title, int width, int height, SDL
         wl_registry_destroy(registry);
         if (ready >= 0 && layer.shell) {
             layer.window = window;
-            layer.role = wl_proxy_marshal_flags(layer.shell, 0, &layer_surface_interface, 1, 0,
-                                                NULL, surface, NULL, LAYER_OVERLAY, "launcher");
-            if (layer.role) {
-                wl_proxy_add_listener(layer.role, (void (**)(void))&layer_listener, &layer);
-                wl_proxy_marshal_flags(layer.role, SET_SIZE, NULL, 1, 0, (uint32_t)width, (uint32_t)height);
-                wl_proxy_marshal_flags(layer.role, SET_ANCHOR, NULL, 1, 0, ANCHOR_TOP);
-                wl_proxy_marshal_flags(layer.role, SET_MARGIN, NULL, 1, 0, 140, 0, 0, 0);
-                wl_proxy_marshal_flags(layer.role, SET_EXCLUSIVE_ZONE, NULL, 1, 0, -1);
-                wl_proxy_marshal_flags(layer.role, SET_KEYBOARD_INTERACTIVITY, NULL, 1, 0, KEYBOARD_EXCLUSIVE);
-                wl_surface_commit(surface);
-                if (wl_display_roundtrip(display) >= 0 && layer.configured)
-                    return window;
-            }
+            layer.display = display;
+            layer.surface = surface;
+            /* The compositor selects an output when assigning the role. */
+            if (defer_layer || cloncher_attach_layer(width, height))
+                return window;
         }
     }
 
@@ -157,7 +172,7 @@ bool cloncher_set_window_size(SDL_Window *window, int width, int height)
 {
     if (!SDL_SetWindowSize(window, width, height))
         return false;
-    if (window == layer.window)
+    if (window == layer.window && layer.role)
         wl_proxy_marshal_flags(layer.role, SET_SIZE, NULL, 1, 0, (uint32_t)width, (uint32_t)height);
     return true;
 }

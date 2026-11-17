@@ -1,6 +1,8 @@
 (ns cloncher.parity-test
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [babashka.fs :as fs]
+            [clojure.test :refer [deftest is run-tests]]
             [cloncher.commands :as commands]
+            [cloncher.config :as config]
             [cloncher.edit :as edit]
             [cloncher.files :as files]
             [cloncher.lisp :as lisp]
@@ -8,13 +10,38 @@
             [cloncher.main :as app]
             [cloncher.menu :as menu]
             [cloncher.palette :as palette]
+            [cloncher.process :as process]
             [cloncher.search :as search]
             [cloncher.sources :as sources]
             [cloncher.view :as view]))
 
+(deftest first-launch-menu-configuration
+  (let [directory (fs/create-temp-dir {:prefix "cloncher-test-"})]
+    (try
+      (binding [process/*environment* {"XDG_CONFIG_HOME" (str directory)}]
+        (let [path (config/path)
+              launches (mapv (fn [_] (future (config/setup! path))) (range 4))
+              original (menu/load-configuration!)]
+          (is (every? #(= path @%) launches))
+          (is (= config/default-text (slurp (str path))))
+          (is (= "Apps" (:label (first (:root-items original)))))
+          (is (= ["Scan Wi-Fi networks" "Wi-Fi settings"] (mapv :label (menu/static-items :wifi))))
+          (let [custom "{:menus {:main {:prompt \"Custom\" :items [{:id :example :label \"My action\" :action {:exec [\"true\"]}}]}}}"]
+            (spit (str path) custom)
+            (let [updated (menu/load-configuration!)]
+              (is (= "My action" (:label (first (:root-items updated)))))
+              (is (not= (:revision original) (:revision updated)))
+              (config/setup! path)
+              (is (= custom (slurp (str path))))
+              (spit (str path) "{:menus {:main {:prompt \"Broken\" :items [{:provider :missing}]}}}")
+              (binding [*err* (java.io.StringWriter.)]
+                (is (= updated (menu/load-configuration!))))))))
+      (finally (fs/delete-tree directory)))))
+
 (deftest compatible-commands
   (is (= {:mode :project-add :path "."} (app/parse-args ["projects" "add"])))
   (is (= {:mode :project-add :path "/tmp"} (app/parse-args ["project-add" "/tmp"])))
+  (is (= {:mode :rename-workspace} (app/parse-args ["rename-workspace"])))
   (is (= {:mode :control} (app/parse-args ["screenshot" "/tmp/panel.png"])))
   (is (= {:mode :secret :prompt "Wi-Fi"} (app/parse-args ["secret" "-p" "Wi-Fi"]))))
 
@@ -30,6 +57,16 @@
     (is (= ["aaa" "aas" "aad"] (subvec codes 0 3)))
     (is (= (count rows) (count (distinct codes))))
     (is (= 1 (:exact (search/jump rows "aas"))))))
+
+(deftest prefixed-search-keeps-the-parent-query
+  (doseq [[prefix kind] [["/" :files] ["@" :projects]]
+          query ["" "marker"]]
+    (let [parent {:kind :root :query query :index 2}
+          {:keys [view open]} (#'app/handle-typing parent (str prefix query) 1 {} {})
+          root (machine/transition machine/initial {:event :open :view view})
+          nested (machine/transition root {:event :push :view open})]
+      (is (= {:kind kind :initial-query query} open))
+      (is (= parent (machine/current (machine/transition nested {:event :back})))))))
 
 (deftest ranked-file-snapshot
   (let [index (files/parse-snapshot

@@ -1,0 +1,174 @@
+;; Cloncher menu configuration. Items appear in the order listed.
+{:menus
+ {:main {:prompt "Menu"
+          :items [{:label "Apps" :icon "󰀻" :action {:menu :apps} :root-only? true}
+                    {:icon "󰖯" :label "Windows" :action {:menu :windows}}
+                    {:icon "󰃖" :label "Projects" :action {:menu :projects}}
+                    {:icon "󰏪" :label "Notes" :action {:menu :notes}}
+                    {:icon "󰇮" :label "Mail" :action {:menu :mail}}
+                    {:icon "󰹑" :label "Screen" :action {:menu :screen}}
+                    {:icon "󰕾" :label "Sound" :action {:menu :sound}}
+                    {:icon "󰞅" :label "Insert" :action {:menu :insert}}
+                    {:icon "󰖩" :label "Connect" :action {:menu :connect}}
+                    {:icon "󰘿" :label "Sync & Backup" :action {:menu :sync}}
+                    {:icon "󰏘" :label "Look" :action {:menu :look}}
+                    {:icon "󰂛" :label "Focus" :action {:menu :focus}}
+                    {:icon "󰒓" :label "System" :action {:menu :system}}
+                    {:icon "󰐥" :label "Power" :action {:menu :power}}]}
+
+   ;; Mod+Space's first row. The launcher owns the app list: this view has
+   ;; no menu rows of its own.
+   :apps {:prompt "Apps"
+          :items []}
+
+   ;; File discovery belongs to the launcher.
+   :files {:prompt "Files" :items []}
+
+   :windows {:prompt "Windows"
+             :items [{:provider :windows/list}]}
+
+   :mail {:prompt "Mail"
+          :items [{:icon "󰧫" :label "Compose email" :action {:exec ["emacsclient" "-c" "-n" "-e" "(mu4e-compose-new)"]}}
+                  {:icon "󰇰" :label "Open inbox" :action {:exec ["my" "niri" "launch" "--title" "^[*]?mu4e" "emacs" "emacsclient" "-c" "-F" "((name . \"mu4e\"))" "-e" "(mu4e)"]}}
+                  {:icon "󰇚" :label "Check mail now" :subtitle "fetch and triage"
+                   ;; Its own transient unit: the check waits for both services
+                   ;; and menu.clj must not hang on it. A second press while one
+                   ;; runs fails on the unit name instead of doubling up.
+                   :action {:exec ["systemd-run" "--user" "--collect" "--quiet" "--unit=mail-check" "~/dotfiles/bin/menu/sync_status.clj" "mail-check"]}}
+                  {:icon "󰌋" :label "Authorize an account" :subtitle "re-login after a password change" :action {:menu :mail-auth}}
+                  {:icon "󰌆" :label "Codes & links" :action {:menu :mail-codes}}]}
+
+   :mail-codes {:prompt "Codes & links"
+                :items [{:provider :mail/codes}]}
+
+   :mail-auth {:prompt "Authorize mail"
+               :items [{:provider :mail/accounts}]}
+
+   :screen {:prompt "Screen"
+            :items [{:icon "󰹑" :label "Screenshot region" :action {:exec ["~/dotfiles/bin/menu/screenshot" "region"]}}
+                    {:icon "󰖯" :label "Screenshot window" :action {:exec ["~/dotfiles/bin/menu/screenshot" "window"]}}
+                    {:icon "󰍹" :label "Screenshot screen" :action {:exec ["~/dotfiles/bin/menu/screenshot" "screen"]}}
+                    {:icon "󰕧" :label "Record" :action {:menu :record}}
+                    {:icon "󰐌" :label "Cast clipboard URL" :action {:exec ["~/dotfiles/bin/menu/cast.clj" "clipboard"]}}
+                    {:icon "󰐌" :label "Cast a file" :action {:exec ["~/dotfiles/bin/menu/cast.clj" "cast"]}}
+                    {:icon "󰍺" :label "Mirror screen to TV" :action {:exec ["~/dotfiles/bin/menu/cast.clj" "mirror"]}}
+                    {:icon "󰍺" :label "TV as extra screen" :action {:exec ["~/dotfiles/bin/menu/cast.clj" "extend"]}}]}
+
+   :insert {:prompt "Insert"
+            :items [{:icon "󰞅" :label "Emoji" :action {:exec ["~/dotfiles/bin/menu/emoji.clj"]}}
+                    {:icon "󰅍" :label "Snippet" :action {:exec ["~/dotfiles/bin/snippy.clj"]}}
+                    {:icon "󰨸" :label "Clipboard history" :action {:exec ["noctalia" "msg" "panel-toggle" "clipboard"]}}]}
+
+   :connect {:prompt "Connect"
+             :items [{:provider :connect/status}]}
+
+   :wifi {:prompt "Wi-Fi networks"
+          :items [{:provider :wifi/networks}
+                  {:id :wifi/scan :icon "󰑓" :section 2 :label "Scan Wi-Fi networks" :hint "scan and refresh"
+                   :refresh :current :progress "Scanning Wi-Fi networks…" :action {:call :wifi/scan}}
+                  {:icon "󰒓" :section 2 :label "Wi-Fi settings"
+                   :subtitle "hidden networks · advanced settings"
+                   :action {:exec ["noctalia" "msg" "panel-open" "control-center" "network"]}}]}
+
+   :bluetooth {:prompt "Bluetooth devices"
+               :items [{:provider :bluetooth/devices}
+                       {:id :bluetooth/scan :icon "󰑓" :label "Scan Bluetooth devices" :hint "scan for 8 seconds and refresh"
+                        :refresh :current :progress "Scanning Bluetooth devices…" :action {:call :bluetooth/scan}}
+                       {:icon "󰒓" :label "Bluetooth settings" :subtitle "advanced settings · remove devices"
+                        :action {:exec ["noctalia" "msg" "panel-open" "control-center" "bluetooth"]}}]}
+
+   :look {:prompt "Look"
+          :items [{:provider :appearance/themes}
+                  {:icon "󰸉" :label "Next wallpaper" :action {:exec ["noctalia" "msg" "wallpaper-next"]}}
+                  {:icon "󰒝" :label "Random wallpaper" :action {:exec ["noctalia" "msg" "wallpaper-random"]}}
+                  {:icon "󰋩" :label "Browse wallpapers" :action {:exec ["noctalia" "msg" "panel-toggle" "wallpaper"]}}
+                  {:icon "󰖔" :label "Night light" :subtitle "toggle" :action {:exec ["noctalia" "msg" "nightlight-force-toggle"]}}]}
+
+   :focus {:prompt "Focus"
+           :items [{:provider :focus/status}
+                   {:icon "󰥔" :label "Remind me" :subtitle "timer / reminder" :action {:call :timers/remind}}
+                   {:icon "󰒲" :label "Sleep in" :action {:call :timers/sleep}}
+                   {:provider :timers/active}]}
+
+   :system {:prompt "System"
+            :items [{:icon "󰏔" :label "Packages" :action {:menu :install}}
+                    {:icon "󰒋" :label "Services" :action {:terminal {:exec ["sysz"]}}}
+                    {:icon "󰾅" :label "Power profile" :action {:menu :power-profile}}
+                    {:icon "󰚩" :label "Claude accounts" :action {:menu :claude}}
+                    {:icon "󰌌" :label "Keybindings" :action {:menu :keybindings}}
+                    {:icon "󰑕" :label "Rename workspace" :action {:call :workspace/rename}}
+                    {:icon "󱁻" :label "Edit config" :action {:menu :config}}]}
+
+   :sound {:prompt "Sound"
+           :items [{:provider :sound/devices}]}
+
+   :power-profile {:prompt "Power profile"
+                   :items [{:provider :power/profiles}]}
+
+   :claude {:prompt "Claude accounts"
+            :items [{:provider :claude/accounts}]}
+
+   :keybindings {:prompt "Keybindings" :searchable? false
+                 :items [{:provider :keys/bindings}]}
+
+
+   :tailscale {:prompt "Tailscale"
+               :items [{:provider :tailscale/networks}]}
+
+   ;; Noctalia's built-in session actions (`noctalia msg session <action>`),
+   ;; in the order and with the labels of its own session panel.
+   :power {:prompt "Power"
+           :items [{:icon "󰌾" :label "Lock" :action {:exec ["noctalia" "msg" "session" "lock"]}}
+                   ;; Suspend always locks first: an unlocked sleeping laptop
+                   ;; is never what is wanted, so there is no bare suspend.
+                   {:icon "󰤄" :label "Suspend" :subtitle "lock & sleep"
+                    :action {:exec ["noctalia" "msg" "session" "lock-and-suspend"]}}
+                   {:icon "󰍃" :label "Log Out" :action {:exec ["noctalia" "msg" "session" "logout"]}}
+                   {:icon "󰜉" :label "Reboot" :action {:exec ["noctalia" "msg" "session" "reboot"]}}
+                   {:icon "󰐥" :label "Shut Down" :action {:exec ["noctalia" "msg" "session" "shutdown"]}}]}
+
+
+   :projects {:prompt "Projects" :searchable? false :items []}
+
+   :record {:prompt "Record"
+            :items [{:provider :record/status}]}
+
+   :install
+   {:prompt "Packages"
+    :items [{:icon "󰏖" :label "Package" :subtitle "filter by repository"
+             :action {:terminal {:exec ["~/dotfiles/bin/menu/pkg.clj" "install" "--repo"] :class "pkg"  :title "Install"}}}
+            {:icon "󰣇" :label "AUR" :action {:call :packages/aur}}
+            {:icon "󰆴" :label "Remove"
+             :action {:terminal {:exec ["~/dotfiles/bin/menu/pkg.clj" "remove"] :class "pkg"  :title "Install"}}}
+            {:icon "󰚰" :label "Update"
+             :action {:terminal {:exec ["~/dotfiles/bin/menu/pkg.clj" "update"] :class "pkg"  :title "Install"}}}]}
+
+   :config
+   {:prompt "Edit config"
+    :items [{:icon "󱁻" :label "Emacs config" :action {:exec ["emacsclient" "-c" "~/dotfiles/emacs/.emacs.d/config.org"]}}
+            {:icon "󰌌" :label "Niri keybinds" :action {:exec ["emacsclient" "-c" "~/dotfiles/niri/.config/niri/mybinds.kdl"]}}
+            {:icon "󰖯" :label "Niri config" :action {:exec ["emacsclient" "-c" "~/dotfiles/niri/.config/niri/config.kdl"]}}
+            {:icon "󱁻" :label "Noctalia config" :action {:exec ["emacsclient" "-c" "~/dotfiles/noctalia/.config/noctalia/config.toml"]}}
+            {:icon "󰍜" :label "Launcher menu" :action {:call :config/edit}}
+            {:icon "󰘮" :label "Noctalia settings" :action {:exec ["noctalia" "msg" "settings-open"]}}
+            {:icon "󰚩" :label "Ask Claude in dotfiles" :action {:terminal {:shell "cd ~/dotfiles; claude"}}}]}
+
+   :sync
+   {:prompt "Sync & Backup"
+    :items [{:icon "󱞒" :label "Syncthing" :action {:exec ["~/dotfiles/bin/menu/sync_status.clj" "syncthing-open"]}}
+            {:icon "󰏤" :label "Pause Syncthing" :action {:exec ["~/dotfiles/bin/menu/sync_status.clj" "syncthing-pause"]}}
+            {:icon "󰐊" :label "Resume Syncthing" :action {:exec ["~/dotfiles/bin/menu/sync_status.clj" "syncthing-resume"]}}
+            {:icon "󰅧" :label "Start Nextcloud" :action {:exec ["~/dotfiles/bin/menu/sync_status.clj" "nextcloud-start"]}}
+            {:icon "󰁯" :label "Back up now" :action {:exec ["~/dotfiles/bin/menu/sync_status.clj" "backup-now"]}}
+            {:icon "󰋚" :label "Backup snapshots" :action {:terminal {:exec ["my" "backup" "snapshots"] :wait? true}}}]}
+
+   :notes
+   {:prompt "Notes"
+    :items [{:icon "" :section 1 :label "Scratchpad" :action {:exec ["emacsclient" "-c" "-e" "(find-file-point-max (user-data \"scratchpad.org\"))"]}}
+            {:icon "" :section 1 :label "Freewriting" :action {:exec ["emacsclient" "-c" "-e" "(find-file-point-max (user-data \"free.org\"))"]}}
+            {:icon "" :section 1 :label "Journal" :action {:exec ["emacsclient" "-c" "~/Documents/journal.org"]}}
+            {:icon "" :section 1 :label "New Note" :action {:exec ["emacsclient" "-c" "-e" "(denote)"]}}
+            {:icon "󰹕" :section 1 :label "List Notes" :action {:exec ["emacsclient" "-c" "-e" "(denote-menu-list-notes)"]}}
+            {:icon "󰅍" :section 1 :label "Edit snippets" :action {:exec ["emacsclient" "-c" "~/.config/snippy/"]}}
+            {:icon "󰐊" :section 2 :label "Open work.org" :action {:exec ["emacsclient" "-c" "~/Documents/work.org"]}}
+            {:icon "󰇮" :section 2 :label "Open inbox.org" :action {:exec ["emacsclient" "-c" "~/Documents/inbox.org"]}}]}}}

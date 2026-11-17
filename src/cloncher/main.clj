@@ -24,7 +24,7 @@
             [cloncher.view-cache :as view-cache]))
 
 (def usage
-  "Usage: cloncher [root | apps | menu [NAME] | files | projects | projects add [DIRECTORY] | project-add [DIRECTORY] | dmenu [-p PROMPT] | secret [-p PROMPT] | daemon | ping | close | screenshot PATH | --screenshot PATH]")
+  "Usage: cloncher [root | apps | menu [NAME] | files | projects | projects add [DIRECTORY] | project-add [DIRECTORY] | rename-workspace | dmenu [-p PROMPT] | secret [-p PROMPT] | daemon | ping | close | screenshot PATH | --screenshot PATH]")
 
 (defn parse-args [args]
   (let [args (if (= ["projects" "add"] (vec (take 2 args)))
@@ -47,18 +47,10 @@
       "screenshot" (if argument {:mode :control} (throw (ex-info usage {})))
       "--screenshot" (if argument {:mode :launcher :kind :root :screenshot argument}
                          (throw (ex-info usage {})))
-      ("ping" "close" "daemon") (if argument (throw (ex-info usage {}))
-                                 {:mode (keyword command)})
+      ("ping" "close" "daemon" "rename-workspace")
+      (if argument (throw (ex-info usage {})) {:mode (keyword command)})
       "--help" {:mode :help}
       (throw (ex-info usage {})))))
-
-(def ^:private root-items
-  (search/index-rows
-    (into [{:label "Apps" :icon "󰀻" :action :apps}]
-          (menu/get-menu-items :main))))
-
-(def ^:private root-labels
-  (into {} (map (juxt menu/format-item :shortcut)) root-items))
 
 (defn- menu-view [key]
   (cond
@@ -77,22 +69,23 @@
         :project-add "Add project directory"
         :project (str (fs/file-name path))
         :file (str (fs/file-name path))
-        :menu (or (:prompt (if (map? key) key (get menu/menus key))) (some-> key name) "Menu")
+        :menu (or (:prompt (menu/definition key)) (some-> key name) "Menu")
         "Search")))
 
-(defn- menu-results [key]
+(defn- menu-results [key root?]
   (if (menu/inline-menu? key)
     (:items key)
-    (mapv #(cond-> % (:path %) (assoc :deep true)) (menu/menu-rows key))))
+    (mapv #(cond-> % (:path %) (assoc :deep true)) (menu/menu-rows key root?))))
 
 (defn- load-view [{:keys [kind key path] :as view}]
   (case kind
-    :root (let [live (future (menu/live-items))]
-            (into (conj (vec @live) (first root-items))
+    :root (let [live (future (menu/live-items))
+                root-labels (into {} (map (juxt menu/format-item :shortcut)) (:root-items (menu/configuration)))]
+            (into (vec @live)
                   (map #(if-let [code (get root-labels (menu/format-item %))]
                           (assoc % :shortcut code) %))
-                  (menu-results :main)))
-    :menu (menu-results key)
+                  (menu-results :main true)))
+    :menu (menu-results key false)
     :apps (search/rank "" (sources/apps) (disk/read-json (disk/cache "history.json") {} false))
     :projects (sources/projects)
     :project-add []
@@ -145,9 +138,9 @@
            :apps-build (when (= :root kind) (frame-job #(hash-map :apps (sources/apps))))
            :rows (or (view-cache/cached-rows view)
                      (case kind
-                       :root root-items
+                       :root (:root-items (menu/configuration))
                        :apps (search/index-rows (search/rank "" apps usage))
-                       :menu (search/index-rows (:items (if (map? key) key (get menu/menus key))))
+                       :menu (search/index-rows (menu/static-items key))
                        :dmenu (search/index-rows (load-view view))
                        :tasks (search/index-rows (:rows view))
                        []))
@@ -173,8 +166,9 @@
                              (catch Exception error {:error (ex-message error)})))
        :exclusive? true}
       (= :projects kind) {:pinned (into [] (keep identity) [(sources/direct-add-row query)])}
-      files? {:pending (frame-job #(try {:rows (files/rows root query)}
-                                    (catch Exception error {:error (ex-message error)})))}
+      files? {:rows (if (str/blank? query) (or (files/cached-recent root) []) [])
+              :pending (frame-job #(try {:rows (files/rows root query)}
+                                     (catch Exception error {:error (ex-message error)})))}
       lisp? {:pending (frame-job #(hash-map :pinned (lisp/rows query))) :exclusive? true}
       (:history? command)
       {:pending (frame-job #(hash-map :pinned (commands/history (:command command) (:terminal? command))))
@@ -199,7 +193,6 @@
     (if (job-ready? job)
       (let [result (try (job-value job) (catch Exception error {:error (ex-message error)}))
             result (cond-> result
-                     (and (= :pending key) (contains? result :rows)) (update :rows search/index-rows)
                      (contains? result :pinned) (update :pinned search/index-rows))]
         (merge (cond-> (dissoc view key :ranked)
                  (= :build key) (dissoc :refresh-progress))
@@ -317,6 +310,19 @@
     (transition! session {:event :off})
     (transition! session {:event :open :view (setup-view definition)})))
 
+(defn reconfigure! [session]
+  (let [{:keys [status stack]} @(:machine session)]
+    (when (= :on status)
+      (let [views (mapv (fn [{:keys [kind key query fixture] :as view}]
+                          (if (and (contains? #{:root :menu} kind) (not fixture) (not (map? key)))
+                            (do (cancel-view! view)
+                                (setup-view (assoc (select-keys view [:kind :key :prompt :index])
+                                                   :initial-query query)))
+                            view))
+                        stack)]
+        (when (some true? (map #(not (identical? %1 %2)) stack views))
+          (transition! session {:event :reconfigure :views views}))))))
+
 (defn close-session! [session]
   (show! session {:kind :off}))
 
@@ -420,7 +426,7 @@
      :target (when (some? exact) (nth rows exact))
      :restore-index restore-index :consumed? true}))
 
-(defn- quick-jump [view typed caret keys {:keys [letter alt? control? jump-cancel?]}]
+(defn- handle-typing [view typed caret keys {:keys [letter alt? control? jump-cancel?]}]
   (let [{:keys [query kind jump]} view
         latched? (:latched? jump)
         {start :start inserted :text} (inserted-text query typed caret)
@@ -450,7 +456,12 @@
           (and latched? typed) {:view view :restore-index (or start (count query)) :consumed? true}
           :else {:view view}))
 
-      (and (some? typed) (not= typed query)) {:view (set-query view typed)}
+      (and (some? typed) (not= typed query))
+      (if-let [destination (when (= :root kind)
+                             (case (first typed) \/ :files \@ :projects nil))]
+        {:view (dissoc view :jump) :open {:kind destination :initial-query (subs typed 1)}}
+        {:view (set-query view typed)})
+
       :else {:view (if (and jump (not latched?) (not alt?)) (dissoc view :jump) view)})))
 
 (defn- copy-choice [view row]
@@ -531,7 +542,8 @@
             paired (when (and typed (= :root kind) (or (lisp/query? typed) (lisp/query? query)))
                      (edit/paired-edit query typed caret))
             typed (or (:text paired) typed)
-            {:keys [view target restore-index consumed?]} (quick-jump view typed caret keys shortcuts)
+            {:keys [view target restore-index consumed?] destination :open}
+            (handle-typing view typed caret keys shortcuts)
             _ (cond
                 (some? restore-index) (cui/replace-input! ui field-id buffer query restore-index)
                 paired (cui/replace-input! ui field-id buffer (:text paired) (:caret paired)))
@@ -576,10 +588,7 @@
                          {:done true :value value}))
                      target (some-> (choose (dissoc view :jump) target shortcuts)
                                     (assoc :used target))
-                     (and (not consumed?) changed? (= :root kind) (str/starts-with? (:query view) "/"))
-                     {:open {:kind :files :initial-query (subs (:query view) 1)}}
-                     (and (not consumed?) changed? (= :root kind) (str/starts-with? (:query view) "@"))
-                     {:open {:kind :projects :initial-query (subs (:query view) 1)}}
+                     destination {:open destination}
                      (and (= :root kind) (:history? shortcuts))
                      (let [{:keys [history? command]} (command-options (:query view))]
                        {:fill (if history? (str ">" command) (str ">>" (or command (:query view))))})
@@ -603,7 +612,7 @@
                 id (:resolve choice)]
             (transition! session {:event :view :view
                                   (assoc view :activation
-                                         (frame-job #(hash-map :resolved {:row (menu/resolve-row key id)
+                                         (frame-job #(hash-map :resolved {:row (menu/resolve-row key id (= :root kind))
                                                                           :shortcuts (:shortcuts choice)})))})
             (poll-jobs! ui))
           (:open choice)
@@ -649,7 +658,7 @@
           (vreset! started current)
           (cui/redraw! ui)))))
 
-(defn open-window! [{:keys [mode screenshot redraw capture cancelled disconnected? timeout-ms] :as request}]
+(defn- open-configured-window! [{:keys [mode screenshot redraw capture cancelled disconnected? timeout-ms] :as request}]
   (let [session (session)
         redraw (or redraw (atom nil))
         capture (or capture (atom nil))
@@ -681,6 +690,7 @@
                      :else ui-view/preview-height)]
         (transition! session {:event :view :view (assoc view :ranked rows)})
         (cui/window! {:width width :height height :redraw redraw
+                      :prepared? (and fit? (:fd request) (nil? screenshot))
                       :app-id (if fit? "cloncher.launcher" "cloncher.launcher.tiled")}
         (fn [ui buffer]
           (cond
@@ -740,6 +750,10 @@
         (when-let [job (:job @(:preview session))] (cancel-job! job))
         (close-session! session)))))
 
+(defn open-window! [request]
+  (binding [menu/*configuration* (menu/load-configuration!)]
+    (open-configured-window! request)))
+
 (defn- picker! [request]
   (:value (open-window! request)))
 
@@ -776,10 +790,13 @@
     (run-effect! effect picker!)
     result))
 
-(defn- daemon-picker! [{:keys [mode prompt lines] :as request}]
-  (:out (socket/request! {:args [(name mode) "-p" prompt]
-                          :lines (or lines []) :env (mapv vec (p/environment))
-                          :options (select-keys request [:allow-empty? :timeout-ms])})))
+(defn- picker-reply [{:keys [mode prompt lines] :as request}]
+  (socket/request! {:args [(name mode) "-p" prompt]
+                    :lines (or lines []) :env (mapv vec (p/environment))
+                    :options (select-keys request [:allow-empty? :timeout-ms])}))
+
+(defn- daemon-picker! [request]
+  (:out (picker-reply request)))
 
 (defn- daemon-reply [args lines]
   (let [args (if (and (= "screenshot" (first args)) (second args))
@@ -792,15 +809,34 @@
     (case mode
       :help (do (println usage) 0)
       :project-add (do (sources/add-project! path) 0)
+      :rename-workspace (do
+                          (run-effect! menu/rename-workspace
+                                       (fn [picker]
+                                         (if-let [reply (when-not (p/getenv "LAUNCHER_STANDALONE")
+                                                          (picker-reply picker))]
+                                           (:out reply)
+                                           (do (load-cui!) (picker! picker)))))
+                          0)
       :ping (or (:exit (daemon-reply args [])) 1)
       :close (or (:exit (daemon-reply args [])) 0)
       :control (or (:exit (daemon-reply args [])) 3)
       :daemon (do (load-cui!)
-                  (future (view-cache/prime!))
-                  (future (sources/apps))
-                  (or (daemon/serve! parse-args open-window!
-                                     (fn [{:keys [effect]}] (run-effect! effect daemon-picker!)))
-                      0))
+                  (let [configuration (menu/load-configuration!)
+                        width ui-view/preview-width
+                        height (:height (ui-view/result-layout ui-view/preview-height (:root-items configuration)))
+                        primed? (volatile! false)]
+                    (or (daemon/serve! parse-args open-window!
+                                       (fn [{:keys [effect]}] (run-effect! effect daemon-picker!))
+                                       (fn []
+                                         (when-not (= "1" (p/getenv "CLONCHER_TILING"))
+                                           (cui/prepare-launcher! width height))
+                                         (when-not @primed?
+                                           (vreset! primed? true)
+                                           (binding [menu/*configuration* configuration]
+                                             (future (view-cache/prime!)))
+                                           (future (sources/apps))
+                                           (future (files/prime!)))))
+                        0)))
       (let [lines (when (= :dmenu mode) (stdio-lines))
             remote (when-not (or (:screenshot request) (System/getenv "LAUNCHER_STANDALONE"))
                      (daemon-reply args (or lines [])))]

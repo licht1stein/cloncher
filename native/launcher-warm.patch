@@ -1,0 +1,46 @@
+--- cloncher-host.c
++++ cloncher-host.c
+@@ -863,6 +863,8 @@
+     return !host_frame_pending(waker) && host_animations_step(&animations, now, animation_replace, ui);
+ }
+
++#include "launcher-warm.inc"
++
+ int cui_host_run_app_wake(const char *title, const char *app_id, const char *icon_svg, int width, int height,
+                          void (*frame)(cui_ctx *ui, void *user), void *user, host_frame_waker *waker) {
+ #ifdef CUI_FONTCONFIG_FILE
+@@ -881,19 +883,18 @@
+     desc.follow_system_theme = false;
+     desc.accent = CUI_ACCENT_NEUTRAL;
+     desc.continuous = false;
+-    host_theme_watch(wake_theme, waker);
++    launcher_watch_theme(&desc, waker);
+     int system_theme = host_theme();
+     if (system_theme >= 0) desc.theme = system_theme ? CUI_THEME_DARK : CUI_THEME_LIGHT;
+-    host_app = cui_app_create(&desc);
++    host_app = take_prepared_launcher(&desc);
++    bool prepared = host_app != NULL;
++    if (!prepared) host_app = cui_app_create(&desc);
+     free(icon);   /* the window copied it into its _NET_WM_ICON property */
+-    if (!host_app) { host_theme_unwatch(); return 1; }
++    if (!host_app) { launcher_unwatch_theme(); return 1; }
+     host_frame_bind(waker, host_app, wake_window);
+     cui_app_set_animator(host_app, animation_next, animation_step, waker);
+     cui_app_ui(host_app)->host_window=host_app;
+-    const char *emoji_font = getenv("TEMPLATE_EMOJI_FONT");
+-    if (emoji_font) cui_emoji_font_load_file(cui_app_ui(host_app), emoji_font);
+-    else cui_emoji_font_load_system(cui_app_ui(host_app));
+-    host_text_fonts(cui_app_ui(host_app));
++    if (!prepared) launcher_load_fonts(host_app);
+     while (cui_app_frame(host_app)) {
+         host_frame_consume(waker);
+         host_theme_poll();
+@@ -926,7 +927,7 @@
+     host_animations_free(&animations);
+     cui_app_destroy(host_app);
+     host_text_fonts_unmap();
+-    host_theme_unwatch();
++    launcher_unwatch_theme();
+     host_app = NULL;
+     return 0;
+ }

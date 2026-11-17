@@ -42,11 +42,17 @@
                                                                   (make-array java.nio.file.attribute.FileAttribute 0)))]
       (try
         (let [executable (build-executable! stage)
-              backend (io/file stage "libcui_host.so")]
+              backend (io/file stage "libcui_host.so")
+              client (io/file stage "cloncher-client")]
+          (terminal/logged! "release-client"
+                            [(or (System/getenv "CC") "cc") "-std=c99" "-O2" "-Wall" "-Wextra"
+                             "native/launcher-client.c" "-o" (.getPath client)])
           (terminal/run! ["install" "-m755" "native/libcui_host.so" (.getPath backend)])
-          (terminal/run! ["mv" "-f" "-t" (.getPath target) "--" (.getPath backend) (.getPath executable)])
+          (terminal/run! ["mv" "-f" "-t" (.getPath target) "--"
+                          (.getPath backend) (.getPath executable) (.getPath client)])
           (terminal/status! :ok "Release ready" (.getPath (io/file target "cloncher")))
           (println "    CUI library     target/libcui_host.so")
+          (println "    Hotkey client   target/cloncher-client")
           (when-not (terminal/verbose?)
             (println "    Build logs      .dev/task-logs/")))
         (finally
