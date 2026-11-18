@@ -8,6 +8,7 @@
             [cloncher.config :as config]
             [cloncher.json :as json]
             [cloncher.search :as search]
+            [cloncher.sources :as sources]
             [cloncher.desktop :as desktop-repl]))
 
 (defn kitty
@@ -144,7 +145,7 @@
          {:icon "󰒲" :label "Sleep in" :action sleep-in-action}]
         (active-timer-items)))
 
-(def pkg-path (str (fs/home) "/dotfiles/bin/menu/pkg.clj"))
+(def pkg-path (str sources/dotfiles "/bin/menu/pkg.clj"))
 
 (defn install-aur-action
   "Ask for an AUR query in the launcher, then open the fzf TUI in kitty."
@@ -206,7 +207,7 @@
     :on {:icon "󰂛" :label "Do not disturb: On" :action cycle-dnd}
     :off {:icon "󰂚" :label "Do not disturb: Off" :action cycle-dnd}))
 
-(def ^:private ambient (str (fs/home) "/dotfiles/bin/menu/ambient.clj"))
+(def ^:private ambient (str sources/dotfiles "/bin/menu/ambient.clj"))
 
 (defn get-themes-menu
   "The ambient widget's switches, through the same `ambient.clj`: a manual
@@ -234,8 +235,8 @@
 ;; Keybindings, read back out of the niri config. mybinds.kdl comes first,
 ;; so a personal bind wins over the base one for the same key.
 (def niri-bind-files
-  [(str (fs/home) "/dotfiles/niri/.config/niri/mybinds.kdl")
-   (str (fs/home) "/dotfiles/niri/.config/niri/base-binds.kdl")])
+  [(str sources/dotfiles "/niri/.config/niri/mybinds.kdl")
+   (str sources/dotfiles "/niri/.config/niri/base-binds.kdl")])
 
 (defn- bind-description
   "A bind's `hotkey-overlay-title`, else its action in a few words: the
@@ -284,7 +285,7 @@
           {:icon "󰌌" :label (format "%-12s %s" (format-key key) description) :action nil})
         (parse-niri-keybindings)))
 
-(def wf-recorder-path (str (fs/home) "/dotfiles/bin/menu/wf_recorder.clj"))
+(def wf-recorder-path (str sources/dotfiles "/bin/menu/wf_recorder.clj"))
 
 (defn get-record-menu-items
   "Get record menu items, with stop at top if recording is active."
@@ -316,7 +317,10 @@
 
 ;; Tailscale
 
-(def tailnets [])
+(declare configuration)
+
+(defn- tailnets []
+  (:tailnets (configuration)))
 
 (defn current-tailnet
   "Current tailnet name from `tailscale status --json`, or nil if unavailable.
@@ -382,13 +386,15 @@
 (defn other-tailnet
   "The tailnet that is not currently active (defaults to the first one)."
   [current]
-  (or (first (remove #(= current (:tailnet %)) tailnets))
-      (first tailnets)))
+  (let [configured (tailnets)]
+    (or (first (remove #(= current (:tailnet %)) configured))
+        (first configured))))
 
 (defn toggle-tailnet
   "Switch to whichever configured tailnet is not currently active."
   []
-  (switch-tailnet (other-tailnet (current-tailnet))))
+  (when-let [target (other-tailnet (current-tailnet))]
+    (switch-tailnet target)))
 
 (defn get-tailscale-menu-items
   "Tailscale menu: the connected tailnet as a status row, then a `Switch to`
@@ -397,12 +403,13 @@
   visible as a row of its own."
   []
   (let [current (current-tailnet)
-        now (first (filter #(= current (:tailnet %)) tailnets))]
+        configured (tailnets)
+        now (first (filter #(= current (:tailnet %)) configured))]
     (into [{:state true :icon "󰖂"
             :label (str "Tailnet: " (or (:label now) current "none"))
             :subtitle (if current "connected" "off") :warn (nil? current)
             :action nil}]
-          (for [{:keys [label tailnet] :as tn} tailnets :when (not= tailnet current)]
+          (for [{:keys [label tailnet] :as tn} configured :when (not= tailnet current)]
             {:icon "󰁔" :label (str "Switch to " label) :hint "switch"
              :action #(switch-tailnet tn)}))))
 
@@ -772,7 +779,7 @@
       :alt-hint (if @bt "turn off" "turn on") :alt-action "noctalia msg bluetooth-toggle"}
      {:icon "󰦝" :label (str "Mullvad: " (if @mullvad "Connected" "Off"))
       :action (if @mullvad "mullvad disconnect" "mullvad connect")}
-     {:icon "󰖂" :label (str "Tailscale: " (or (:label (first (filter #(= @tailnet (:tailnet %)) tailnets)))
+     {:icon "󰖂" :label (str "Tailscale: " (or (:label (first (filter #(= @tailnet (:tailnet %)) (tailnets))))
                                               @tailnet "Off"))
       :action :tailscale}]))
 
@@ -781,7 +788,7 @@
    {:icon "󰅶" :label (str "Caffeine: " (if (caffeine-on?) "On" "Off")) :subtitle "keep awake"
     :action "noctalia msg caffeine-toggle"}])
 
-(def mail-triage-path (str (fs/home) "/dotfiles/bin/ai/jobs/mail_triage.clj"))
+(def mail-triage-path (str sources/dotfiles "/bin/ai/jobs/mail_triage.clj"))
 
 ;; What bin/email.clj recorded about the last sync, per account.
 (def mail-sync-status-path (str (System/getProperty "user.home") "/.cache/mail-sync/status.json"))
@@ -853,12 +860,12 @@
                 :label (str "Authorize " account)
                 :subtitle (when-not ok (fit (str message) 48))
                 :rank (cond needsAuth 0 (not ok) 1 :else 2)
-                :action (kitty (str (fs/home) "/dotfiles/bin/email.clj authorize " account) :wait? true)})]
+                :action (kitty (str sources/dotfiles "/bin/email.clj authorize " account) :wait? true)})]
     (if (seq rows)
       (->> rows (sort-by :rank) (mapv #(dissoc % :rank)))
       [{:icon "󰎮" :label "No mail accounts in isyncrc"}])))
 
-(def claude-account-path (str (fs/home) "/dotfiles/bin/menu/claude_account.clj"))
+(def claude-account-path (str sources/dotfiles "/bin/menu/claude_account.clj"))
 
 (defn get-claude-items
   "The saved Claude Code accounts, switched with the widget's own script."
@@ -933,8 +940,8 @@
            ["balanced" "󰾅" "Balanced"]
            ["power-saver" "󰾆" "Power saver"]])))
 
-(def ^:private cast-path (str (fs/home) "/dotfiles/bin/menu/cast.clj"))
-(def ^:private sync-status-path (str (fs/home) "/dotfiles/bin/menu/sync_status.clj"))
+(def ^:private cast-path (str sources/dotfiles "/bin/menu/cast.clj"))
+(def ^:private sync-status-path (str sources/dotfiles "/bin/menu/sync_status.clj"))
 (def ^:private mirror-state-file
   "cast.clj's record of a running mirror or extra screen."
   (str (fs/path (or (System/getenv "XDG_RUNTIME_DIR") "/tmp") "noctalia-cast-mirror" "mirror.json")))
@@ -1089,16 +1096,23 @@
               [:action :alt-action]))))
 
 (defn- compile-configuration [text]
-  (let [{:keys [menus]} (config/read-config text)]
+  (let [{:keys [menus tailnets] :or {tailnets []}} (config/read-config text)]
     (when-not (and (map? menus) (contains? menus :main))
       (throw (ex-info "Expected a :menus map containing :main" {})))
+    (when-not (and (vector? tailnets)
+                   (every? (fn [entry]
+                             (and (map? entry)
+                                  (every? #(and (string? %) (not (str/blank? %)))
+                                          (map entry [:label :tailnet :account]))))
+                           tailnets))
+      (throw (ex-info "Expected :tailnets to contain :label, :tailnet and :account strings" {})))
     (let [menus (into {} (map (fn [[key menu]]
                                 (when-not (and (keyword? key) (nil? (namespace key))
                                                (map? menu) (string? (:prompt menu)) (vector? (:items menu)))
                                   (throw (ex-info (str "Invalid menu " key) {:menu key})))
                                 [key (update menu :items #(mapv (partial compile-item menus key) %))])) menus)
           root-items (search/index-rows (remove :provider (get-in menus [:main :items])))]
-      {:menus menus :root-items root-items :revision (str (hash text))})))
+      {:menus menus :tailnets tailnets :root-items root-items :revision (str (hash text))})))
 
 (def ^:private defaults (delay (compile-configuration config/default-text)))
 (defonce ^:private configuration-files (atom {}))
