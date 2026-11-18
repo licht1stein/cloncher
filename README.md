@@ -156,3 +156,9 @@ jolt -Srepro -M:test
 ```
 
 If you try Cloncher on another Linux setup, I'd especially like to hear which parts worked out of the box and which still assume my desktop.
+
+## License
+
+Cloncher is licensed under the GNU General Public License, version 3 only (`GPL-3.0-only`). [Full license text](LICENSE)
+
+If you fix a bug or improve an integration, please send a pull request upstream so everyone can use it.
