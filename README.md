@@ -24,7 +24,13 @@ The daemon warms the window and fonts and caches commonly used rows. File search
 
 ## Demos
 
-These are recordings of the compiled launcher. The Wi-Fi inventory and files are sample data. Click any loop for its MP4.
+These are recordings of the compiled launcher with sample device states and files. Click any loop for its MP4.
+
+### See what’s running from the main menu
+
+Active reminders and sleep timers appear above Apps with their remaining time. Press Enter on a timer to cancel it. The same section can stop a screen recording, disconnect Mullvad, or turn off Do Not Disturb. Watch a reminder expire and the VPN disconnect while the menu stays open.
+
+[![Main menu showing recording and VPN controls above Apps, with a countdown that expires in place](docs/media/live-menu.gif)](docs/media/live-menu.mp4)
 
 ### Wi-Fi stays in the menu
 
