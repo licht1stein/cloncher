@@ -1,5 +1,8 @@
 /* Included by cui_host.c so the prepared window can share its font setup. */
 #include <pthread.h>
+#include <SDL3/SDL.h>
+
+#include "timer-card.inc"
 
 static cui_app *prepared_launcher;
 static bool use_prepared_launcher;
@@ -10,7 +13,29 @@ static host_frame_waker *prepared_theme_waker;
 extern bool cloncher_layer_ready(void);
 extern bool cloncher_attach_layer(int, int);
 extern void cloncher_defer_layer(bool);
+extern bool cloncher_is_timer_overlay(const char *);
 extern void cui__plat_show(cui_app *);
+
+static bool configure_timer_overlay(cui_app_desc *desc) {
+    if (strcmp(cui_app_backend(NULL), "wayland")) {
+        fprintf(stderr, "%s requires Wayland\n", desc->app_id);
+        return false;
+    }
+    desc->width = desc->min_width = 300;
+    desc->height = desc->min_height = 108;
+    /* SDL's normal-priority hint in the template must not be overridden by
+     * the environment: this ID selects the no-fallback SDL window adapter. */
+    return SDL_SetHintWithPriority(SDL_HINT_APP_ID, desc->app_id, SDL_HINT_OVERRIDE);
+}
+
+static void reset_timer_colors(cui_ctx *ui) {
+    const int appearance = cui_host_system_appearance();
+    if (appearance >= 0) {
+        const cui_theme_mode mode = appearance ? CUI_THEME_DARK : CUI_THEME_LIGHT;
+        if (mode != ui->mode) cui__theme_init(ui, mode, ui->accent);
+    }
+    memcpy(ui->theme.colors, ui->target_theme.colors, sizeof ui->theme.colors);
+}
 
 static void launcher_load_fonts(cui_app *app) {
     cui_ctx *ui = cui_app_ui(app);

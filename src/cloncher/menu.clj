@@ -9,6 +9,7 @@
             [cloncher.json :as json]
             [cloncher.search :as search]
             [cloncher.sources :as sources]
+            [cloncher.timer-overlay :as overlay]
             [cloncher.desktop :as desktop-repl]))
 
 (defn kitty
@@ -104,6 +105,52 @@
 
 (defn remind-me-action [] (timer-action :reminder))
 (defn sleep-in-action [] (timer-action :sleep))
+
+(defn- start-overlay! [kind seconds label]
+  (try
+    (overlay/start! kind seconds label)
+    (catch Exception error
+      (binding [*out* *err*] (println "cloncher:" (ex-message error)))
+      (try (p/sh {:continue true} "notify-send" "--" "Could not open timer" (ex-message error))
+           (catch Exception _ nil)))))
+
+(defn- countdown-action []
+  (loop [prompt "Countdown duration (5m, 1h 30m, 13:30)"]
+    (when-let [input (some-> (prompt-input prompt) str/trim not-empty)]
+      (if-let [duration (timer-duration input)]
+        (when-some [label (prompt-input "Countdown label (optional)")]
+          (let [duration (or (clock-duration input) duration)]
+            (start-overlay! "countdown" (parse-long (subs duration 0 (dec (count duration)))) (str/trim label))))
+        (recur "Use a duration up to 365d, or a time like 13:30")))))
+
+(defn- stopwatch-action [] (start-overlay! "stopwatch" nil ""))
+
+(defn- show-laps! [id]
+  (when-let [laps (seq (:laps (overlay/control! id "laps")))]
+    (show-menu "Stopwatch laps · split / total"
+               (mapv (fn [{:keys [number split total]}] (str "Lap " number "  ·  " split "  /  " total))
+                     (rseq (vec laps))))))
+
+(defn- overlay-item []
+  (when-let [{:keys [id kind label digits phase latest-lap]} (overlay/status)]
+    (let [stopwatch? (= kind "stopwatch")
+          paused? (= phase "paused")
+          finished? (= phase "finished")
+          can-lap? (and stopwatch? (= phase "running"))
+          control (fn [title op] {:label title :action #(overlay/control! id op)})
+          items (cond-> []
+                  (not finished?) (conj (if paused?
+                                          (control "Resume" "resume")
+                                          (control "Pause" "pause")))
+                  can-lap? (conj (control "Record lap" "lap"))
+                  latest-lap (conj {:label "Lap history" :action #(show-laps! id)})
+                  true (conj (control "Restart" "restart")
+                             (control (if finished? "Dismiss" "Close") "close")))]
+      (cond-> {:icon (if stopwatch? "󰔛" "󰥔") :label label :row-id "timer-overlay"
+               :subtitle (str digits (cond paused? " · paused" finished? " · time’s up")
+                              (when latest-lap (str " · lap " (:number latest-lap) ": " (:split latest-lap))))
+               :hint "controls" :search (str kind " timer") :action {:prompt label :items items}}
+        can-lap? (assoc :alt-hint "record lap" :alt-action #(overlay/control! id "lap"))))))
 
 (defn cancel-timer! [unit]
   (let [result (p/sh {:continue true} "systemctl" "--user" "stop" unit
@@ -784,9 +831,12 @@
       :action :tailscale}]))
 
 (defn get-focus-items []
-  [(get-dnd-menu-item)
-   {:icon "󰅶" :label (str "Caffeine: " (if (caffeine-on?) "On" "Off")) :subtitle "keep awake"
-    :action "noctalia msg caffeine-toggle"}])
+  (into [{:icon "󰥔" :label "Countdown" :subtitle "on-screen timer" :action countdown-action}
+         {:icon "󰔛" :label "Stopwatch" :subtitle "on-screen elapsed time" :action stopwatch-action}]
+        (keep identity
+              [(try (get-dnd-menu-item) (catch Exception _ nil))
+               {:icon "󰅶" :label (str "Caffeine: " (if (caffeine-on?) "On" "Off")) :subtitle "keep awake"
+                :action "noctalia msg caffeine-toggle"}])))
 
 (def mail-triage-path (str sources/dotfiles "/bin/ai/jobs/mail_triage.clj"))
 
@@ -974,6 +1024,7 @@
         vpn (future (mullvad-connected?))
         timers (future (try (filterv :action (active-timer-items)) (catch Exception _ [])))]
     (->> (concat
+          [(overlay-item)]
           [(when (:recording @recording)
              {:icon "󰑊" :label "Stop recording" :subtitle "recording"
               :action (str wf-recorder-path " stop")})
@@ -1031,6 +1082,7 @@
   {:workspace/rename rename-workspace :packages/aur install-aur-action
    :wifi/scan scan-wifi! :bluetooth/scan scan-bluetooth!
    :timers/remind remind-me-action :timers/sleep sleep-in-action
+   :timers/countdown countdown-action :timers/stopwatch stopwatch-action
    :config/edit #(p/sh "emacsclient" "-c" (str (config/path)))})
 
 (defn- command-args [argv]

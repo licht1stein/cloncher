@@ -32,7 +32,6 @@
 
 (defn- release!
   []
-  (terminal/heading! "release")
   (terminal/status! :step "Build CUI backend")
   (terminal/logged! "native" ["sh" "bin/build-cui"])
   (terminal/status! :ok "CUI backend ready" "native/libcui_host.so")
@@ -58,4 +57,30 @@
         (finally
           (terminal/run! ["rm" "-rf" "--" (.getPath stage)]))))))
 
-(terminal/exit! release!)
+(defn- install! []
+  (let [local (io/file (System/getProperty "user.home") ".local")
+        destination (str (io/file local "libexec" "cloncher"))
+        bin (str (io/file local "bin"))
+        command (str (io/file bin "cloncher"))
+        files ["libcui_host.so" "cloncher" "cloncher-client"]]
+    (terminal/status! :step "Install Cloncher" destination)
+    (terminal/run! ["install" "-d" "--" destination bin])
+    (let [stage (str (java.nio.file.Files/createTempDirectory (.toPath (io/file destination)) ".install-"
+                                                             (make-array java.nio.file.attribute.FileAttribute 0)))]
+      (try
+        (terminal/run! (into ["install" "-m755" "-t" stage "--"] (map #(str (io/file "target" %))) files))
+        (terminal/run! (into ["mv" "-f" "-t" destination "--"] (map #(str (io/file stage %))) files))
+        (finally
+          (terminal/run! ["rm" "-rf" "--" stage]))))
+    (terminal/run! ["ln" "-sfnT" "--" "../libexec/cloncher/cloncher-client" command])
+    (terminal/status! :ok "Installed Cloncher" command)
+    (terminal/status! :step "Restart launcher.service")
+    (terminal/run! ["systemctl" "--user" "restart" "launcher.service"])
+    (terminal/status! :ok "Restarted launcher.service")))
+
+(terminal/exit!
+  (fn []
+    (let [install? (= ["install"] (vec *command-line-args*))]
+      (terminal/heading! (if install? "install" "release"))
+      (release!)
+      (when install? (install!)))))

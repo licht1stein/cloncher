@@ -15,12 +15,13 @@ backend=$(cd "$template" && nix-build --no-out-link --argstr adapter "$project/n
       source = builtins.path { path = /. + "${adapter}/launcher-layer.c"; };
       warm = builtins.path { path = /. + "${adapter}/launcher-warm.inc"; };
       warmPatch = builtins.path { path = /. + "${adapter}/launcher-warm.patch"; };
+      timerCard = builtins.path { path = /. + "${adapter}/timer-card.inc"; };
   in base.overrideAttrs (old: let
     host = builtins.elemAt (builtins.elemAt
       (builtins.split "(/[^[:space:]]+/cui_host[.]c)" old.buildPhase) 1) 0;
   in {
     buildInputs = old.buildInputs ++ [ pkgs.wayland ];
-    buildPhase = "cp ${host} cloncher-host.c\nchmod u+w cloncher-host.c\ncp ${warm} launcher-warm.inc\npatch -p0 < ${warmPatch}\n" + builtins.replaceStrings
+    buildPhase = "cp ${host} cloncher-host.c\nchmod u+w cloncher-host.c\ncp ${warm} launcher-warm.inc\ncp ${timerCard} timer-card.inc\npatch -p0 < ${warmPatch}\n" + builtins.replaceStrings
       [ host "-c src/platform/cui_app_sdl3.c" "src/platform/cui_app.c src/platform/cui_dialogs.c" "sdl3 librsvg-2.0" ]
       [ "-I${builtins.dirOf host} ./cloncher-host.c"
         "-include ${header} -c src/platform/cui_app_sdl3.c"

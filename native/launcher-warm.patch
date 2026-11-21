@@ -9,10 +9,12 @@
  int cui_host_run_app_wake(const char *title, const char *app_id, const char *icon_svg, int width, int height,
                           void (*frame)(cui_ctx *ui, void *user), void *user, host_frame_waker *waker) {
  #ifdef CUI_FONTCONFIG_FILE
-@@ -881,19 +883,18 @@
+@@ -881,19 +883,21 @@
      desc.follow_system_theme = false;
      desc.accent = CUI_ACCENT_NEUTRAL;
      desc.continuous = false;
++    const bool timer_overlay = cloncher_is_timer_overlay(desc.app_id);
++    if (timer_overlay && !configure_timer_overlay(&desc)) { free(icon); return 1; }
 -    host_theme_watch(wake_theme, waker);
 +    launcher_watch_theme(&desc, waker);
      int system_theme = host_theme();
@@ -24,6 +26,7 @@
      free(icon);   /* the window copied it into its _NET_WM_ICON property */
 -    if (!host_app) { host_theme_unwatch(); return 1; }
 +    if (!host_app) { launcher_unwatch_theme(); return 1; }
++    if (timer_overlay) cui_app_ui(host_app)->transparent_root = true;
      host_frame_bind(waker, host_app, wake_window);
      cui_app_set_animator(host_app, animation_next, animation_step, waker);
      cui_app_ui(host_app)->host_window=host_app;
@@ -35,7 +38,22 @@
      while (cui_app_frame(host_app)) {
          host_frame_consume(waker);
          host_theme_poll();
-@@ -926,7 +927,7 @@
+@@ -900,12 +904,13 @@
+         back_frame_begin(cui_app_ui(host_app));
+         host_frame_begin(host_app, cui_app_ui(host_app));
+         host_animations_begin(&animations);
++        if (timer_overlay) reset_timer_colors(cui_app_ui(host_app));
+         frame(cui_app_ui(host_app), user);
+         host_animations_end(&animations);
+         host_frame_end(host_app, cui_app_ui(host_app));
+         back_frame_end(cui_app_ui(host_app));
+         cui_end_frame(cui_app_ui(host_app));
+-        host_wash_prepare(cui_app_ui(host_app));
++        if (!timer_overlay) host_wash_prepare(cui_app_ui(host_app));
+         if (capture_path[0]) {
+             /* Finalize layout before sizing the pixel buffer. Draw data still
+              * describes the previous frame until this call (zero on startup,
+@@ -926,7 +931,7 @@
      host_animations_free(&animations);
      cui_app_destroy(host_app);
      host_text_fonts_unmap();
@@ -44,3 +62,79 @@
      host_app = NULL;
      return 0;
  }
+--- src/cui_internal.h
++++ src/cui_internal.h
+@@ -490,5 +490,6 @@
+     /* viewport */
+     float vw, vh, scale;
+     cui_direction direction;
++    bool transparent_root;
+ 
+     /* time */
+--- src/cui_core.c
++++ src/cui_core.c
+@@ -894,7 +894,7 @@
+     cui_node *r = cui__node(ui, root);
+     r->w = CUI_PX(ui->vw);
+     r->h = CUI_PX(ui->vh);
+-    r->bg = ui->theme.colors[CUI_TOKEN_BACKGROUND];
++    if (!ui->transparent_root) r->bg = ui->theme.colors[CUI_TOKEN_BACKGROUND];
+     r->dir = CUI_COLUMN;
+     r->direction = (uint8_t)ui->direction;
+     r->flags |= CUI_NF_CLIP;
+@@ -942,6 +942,8 @@
+     dd->height_px = (int)(ui->vh * ui->scale + 0.5f);
+-    dd->clear_color = ui->theme.colors[CUI_TOKEN_BACKGROUND];
++    dd->clear_color = ui->transparent_root ? (cui_color){0} : ui->theme.colors[CUI_TOKEN_BACKGROUND];
++    /* Only a transparent root requests an alpha clear. */
++    if (!ui->transparent_root) dd->clear_color.a = 255;
+     dd->font_atlas = ui->atlas_tex;
+     dd->wash = NULL;
+     ui->in_frame = false;
+ }
+--- src/render/cui_render_gl.c
++++ src/render/cui_render_gl.c
+@@ -441,5 +441,6 @@
+     if (clear) {
+         if (limit) { r->gl.Enable(GL_SCISSOR_TEST_); r->gl.Scissor(limit[0], H - limit[3], limit[2] - limit[0], limit[3] - limit[1]); }
+-        r->gl.ClearColor(dd->clear_color.r / 255.0f, dd->clear_color.g / 255.0f, dd->clear_color.b / 255.0f, 1.0f);
++        r->gl.ClearColor(dd->clear_color.r / 255.0f, dd->clear_color.g / 255.0f,
++                         dd->clear_color.b / 255.0f, dd->clear_color.a / 255.0f);
+         r->gl.Clear(GL_COLOR_BUFFER_BIT_);
+         if (limit) r->gl.Disable(GL_SCISSOR_TEST_);
+--- src/render/cui_render_sw.c
++++ src/render/cui_render_sw.c
+@@ -609,5 +609,5 @@
+                                int x0, int y0, int x1, int y1) {
+     cui_color cc = dd->clear_color;
+-    uint8_t c4[4] = { cc.r, cc.g, cc.b, 255 };
++    uint8_t c4[4] = { cc.r, cc.g, cc.b, cc.a };
+     if (fmt == CUI_SW_BGRA) { c4[0] = cc.b; c4[2] = cc.r; }
+     for (int y = y0; y < y1; y++) {
+--- src/platform/cui_app_sdl3.c
++++ src/platform/cui_app_sdl3.c
+@@ -317,6 +317,10 @@
+ void cui__plat_present(cui_app *app, const void *bgra, int w, int h, int stride) {
++    if (app->ui->transparent_root) {
++        cloncher_present_timer(bgra, w, h, stride);
++        return;
++    }
+     cui__sdl3 *s = cui__s3(app);
+     SDL_Surface *dst = SDL_GetWindowSurface(s->win);
+     if (!dst) return;
+     SDL_Surface *src = SDL_CreateSurfaceFrom(w, h, SDL_PIXELFORMAT_ARGB8888, (void *)bgra, stride);
+     if (src) { SDL_BlitSurface(src, NULL, dst, NULL); SDL_DestroySurface(src); }
+@@ -333,5 +337,13 @@
+     SDL_GetWindowSizeInPixels(s->win, &pw, &ph);
+     float sc = SDL_GetWindowDisplayScale(s->win);
+     if (sc <= 0) sc = 1;
++    if (app->ui->transparent_root) {
++        int logical_width, logical_height;
++        SDL_GetWindowSize(s->win, &logical_width, &logical_height);
++        *w = (float)logical_width;
++        *h = (float)logical_height;
++        *scale = sc; *fb_w = pw; *fb_h = ph;
++        return;
++    }
+     const char *env = SDL_getenv("CUI_SCALE");
+     if (env) { float e = (float)SDL_atof(env); if (e > 0.25f && e < 8) sc = e; }

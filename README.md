@@ -43,6 +43,16 @@ Active reminders and sleep timers appear above Apps with their remaining time. P
 
 [![Main menu showing recording and VPN controls above Apps, with a countdown that expires in place](docs/media/live-menu.gif)](docs/media/live-menu.mp4)
 
+### Keep a countdown or stopwatch on screen
+
+Search for **Countdown** or **Stopwatch**, or open **Focus**. A countdown accepts a duration (`5m`, `1h 30m`, or a bare number in minutes) or the next occurrence of a clock time (`13:30`), then asks for an optional label. A stopwatch starts immediately. Starting either replaces the current on-screen timer.
+
+The translucent card uses the launcher’s palette, updates when the theme changes, and stays in the upper right below the desktop bar’s reserved space. It’s a click-through Wayland layer-shell overlay, not a tiled or floating window. There is no regular-window fallback on X11 or Wayland compositors without layer-shell.
+
+Select the active timer above Apps to pause, resume, restart, or close it. When a countdown finishes, the bell gives a gentle ripple every three seconds until dismissed or restarted. The card stays at zero and sends no desktop notification. **Remind me** still sends a notification.
+
+With a running stopwatch selected, press **Ctrl+Enter** to record a lap, or choose **Record lap** in its controls. The card shows the latest split. **Lap history** shows each split and its cumulative time to the hundredth of a second. Paused time doesn’t count; restarting clears the laps.
+
 ### Wi-Fi stays in the menu
 
 See signal strength, security, and the connected network at a glance. Start a scan and the spinner appears on the scan row itself. The result list refreshes in place when the scan finishes.
@@ -82,6 +92,16 @@ The primary desktop is Linux with Niri. Cloncher opens as a layer-shell overlay 
 On x86-64 Linux, `nix-shell` brings in Jolt, a C compiler, and common integration tools. With direnv hooked into your shell, `direnv allow` loads the same environment on entry. Run `jolt -Srepro -M:test` to verify the setup.
 
 Building the CUI host currently requires access to my private CUI template checkout. Cloncher finds it in a sibling `jolt-poly-template` directory or via `CLONCHER_CUI_TEMPLATE`. If you already have a compatible `libcui_host.so`, point `CLONCHER_CUI_LIBRARY` at it for `jolt dev` or `jolt prod`. [Install Jolt without Nix](https://github.com/jolt-lang/jolt#install)
+
+If your graphical session already uses the `launcher.service` systemd user unit, run:
+
+```sh
+jolt install
+```
+
+This builds the release, installs all three artifacts in `~/.local/libexec/cloncher/`, links `~/.local/bin/cloncher` to the hotkey client, and restarts `launcher.service`. It does not create or enable the unit. Bind Mod+Space to `~/.local/bin/cloncher` for this setup.
+
+To build and run without the user unit:
 
 ```sh
 CLONCHER_CUI_TEMPLATE=/path/to/jolt-poly-template jolt release

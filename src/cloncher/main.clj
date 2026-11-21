@@ -19,6 +19,7 @@
             [cloncher.search :as search]
             [cloncher.socket :as socket]
             [cloncher.sources :as sources]
+            [cloncher.timer-overlay :as timer-overlay]
             [cloncher.view :as ui-view]
             [cloncher.usage :as usage]
             [cloncher.view-cache :as view-cache]))
@@ -854,7 +855,12 @@
 
 (defn -main [& args]
   (System/exit
-    (try (run args)
+    (try (if (= "--timer-overlay" (first args))
+           (let [[_ path initial & extra] args]
+             (when-not (and path initial (empty? extra)) (throw (ex-info usage {})))
+             (timer-overlay/worker! path initial load-cui!)
+             0)
+           (run args))
          (catch Exception error
            (binding [*out* *err*] (println "cloncher:" (ex-message error)))
            1))))

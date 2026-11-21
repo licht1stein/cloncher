@@ -13,4 +13,6 @@
                :task (System/exit (:exit (apply shell {:continue true}
                                                 "jolt" "-Srepro" "-M:prod" *command-line-args*)))}
          release {:doc "Build target/cloncher, preferring a compiler-free native executable."
-                  :task (shell "jolt" "-A:cli" "-f" "bin/release.clj")}}}
+                  :task (shell "jolt" "-A:cli" "-f" "bin/release.clj")}
+         install {:doc "Release, install to ~/.local, and restart launcher.service."
+                  :task (shell "jolt" "-A:cli" "-f" "bin/release.clj" "install")}}}
