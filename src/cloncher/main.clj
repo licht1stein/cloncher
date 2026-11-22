@@ -26,7 +26,7 @@
             [cloncher.view-cache :as view-cache]))
 
 (def usage
-  "Usage: cloncher [root | apps | menu [NAME] | files | projects | projects add [DIRECTORY] | project-add [DIRECTORY] | rename-workspace | dmenu [-p PROMPT] | secret [-p PROMPT] | daemon | ping | close | screenshot PATH | --screenshot PATH]")
+  "Usage: cloncher [root | apps | menu [NAME] | files | projects | projects add [DIRECTORY] | project-add [DIRECTORY] | rename-workspace | note | dmenu [-p PROMPT] | secret [-p PROMPT] | daemon | ping | close | screenshot PATH | --screenshot PATH]")
 
 (defn parse-args [args]
   (let [args (if (= ["projects" "add"] (vec (take 2 args)))
@@ -49,7 +49,7 @@
       "screenshot" (if argument {:mode :control} (throw (ex-info usage {})))
       "--screenshot" (if argument {:mode :launcher :kind :root :screenshot argument}
                          (throw (ex-info usage {})))
-      ("ping" "close" "daemon" "rename-workspace")
+      ("ping" "close" "daemon" "rename-workspace" "note")
       (if argument (throw (ex-info usage {})) {:mode (keyword command)})
       "--help" {:mode :help}
       (throw (ex-info usage {})))))
@@ -819,6 +819,8 @@
                                            (:out reply)
                                            (do (load-cui!) (picker! picker)))))
                           0)
+      ;; The editor runs in this process; the hotkey client already started a fresh one.
+      :note (do (menu/scratchpad-note! #(note/worker! % load-cui!)) 0)
       :ping (or (:exit (daemon-reply args [])) 1)
       :close (or (:exit (daemon-reply args [])) 0)
       :control (or (:exit (daemon-reply args [])) 3)

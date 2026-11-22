@@ -55,7 +55,9 @@ With a running stopwatch selected, press **Ctrl+Enter** to record a lap, or choo
 
 ### Jot a note into your scratchpad
 
-Search for **Quick note**, or open **Notes**. A translucent editor opens in the middle of the screen in the launcher's palette. Press **Ctrl+Enter** to append the note to your scratchpad under a heading with an inactive Org timestamp, such as `* [2026-11-22 Sun 14:05]`. Press **Esc** or the close button to discard it. If the file can't be written, the editor stays open with your text.
+Search for **Quick note**, open **Notes**, or bind a key to `cloncher note`. A translucent editor opens in the middle of the screen in the launcher's palette. Press **Ctrl+Enter** to append the note to your scratchpad under a heading with an inactive Org timestamp, such as `* [2026-11-22 Sun 14:05]`. Press **Esc** or the close button to discard it. If the file can't be written, the editor stays open with your text.
+
+![Quick note editor over the desktop wallpaper, with a two-line note, a word count, and the Ctrl+Enter save hint](docs/media/quick-note.png)
 
 Set the file with a top-level `:scratchpad` path in your config, for example `:scratchpad "~/org/scratchpad.org"`. Like the timer, the editor is a Wayland layer-shell overlay. It takes the keyboard until you save or dismiss it.
 

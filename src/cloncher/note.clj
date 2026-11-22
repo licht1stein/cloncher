@@ -187,7 +187,7 @@
         radius 22.0
         action (volatile! (when escape? :cancel))]
     (in-box ui {:width [:fill 1] :height [:fill 1] :radius radius :clip true
-                :bg (color ui :surface 196) :border 1 :border-color (color ui :border-subtle 170)}
+                :bg (color ui :surface 222) :border 1 :border-color (color ui :border-subtle 170)}
       (in-box ui {:dir :row :width [:fill 1] :gap 10 :align :center
                   :pad-top 14 :pad-left 18 :pad-right 12}
         (in-box ui {:width [:px 28] :height [:px 28] :radius 8 :align :center :pad-top 6 :bg accent}

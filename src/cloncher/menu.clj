@@ -115,19 +115,22 @@
       (try (p/sh {:continue true} "notify-send" "--" "Could not open timer" (ex-message error))
            (catch Exception _ nil)))))
 
-(declare configuration)
+(declare configuration load-configuration!)
 
-(defn- scratchpad-note!
-  "Open the quick-note editor for the configured `:scratchpad` Org file."
-  []
-  (try
-    (let [path (or (:scratchpad (configuration))
-                   (throw (ex-info (str "Set :scratchpad in " (config/path) " to an Org file") {})))]
-      (note/start! (str/replace-first path #"^~(?=/)" (or (p/getenv "HOME") (str (fs/home))))))
-    (catch Exception error
-      (binding [*out* *err*] (println "cloncher:" (ex-message error)))
-      (try (p/sh {:continue true} "notify-send" "--" "Could not open the note editor" (ex-message error))
-           (catch Exception _ nil)))))
+(defn scratchpad-note!
+  "Open the quick-note editor for the configured `:scratchpad` Org file, by default
+  in a helper process; `open!` receives the expanded path. Effects run outside the
+  session's configuration binding, so read the current config file."
+  ([] (scratchpad-note! note/start!))
+  ([open!]
+   (try
+     (let [path (or (:scratchpad (load-configuration!))
+                    (throw (ex-info (str "Set :scratchpad in " (config/path) " to an Org file") {})))]
+       (open! (str/replace-first path #"^~(?=/)" (or (p/getenv "HOME") (str (fs/home))))))
+     (catch Exception error
+       (binding [*out* *err*] (println "cloncher:" (ex-message error)))
+       (try (p/sh {:continue true} "notify-send" "--" "Could not open the note editor" (ex-message error))
+            (catch Exception _ nil))))))
 
 (defn- countdown-action []
   (loop [prompt "Countdown duration (5m, 1h 30m, 13:30)"]
