@@ -74,7 +74,7 @@
            (keep (fn [row] (when-let [n (score query tokens mask row)] [row n])))
            (sort-by (fn [[row n]]
                       [(if (= (:shortcut row) query) 0 1)
-                       (if (:window row) 0 1) (if (:live row) 0 1)
+                       (if (:window row) 0 1) (if (:live row) 0 1) (if (:app? row) 1 0)
                        (or (:section row) 0) (or (:order row) 0) (- (+ n (* 4 (used row))))]))
            (mapv first))))))
 

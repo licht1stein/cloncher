@@ -42,6 +42,7 @@
 
 (defn section-start? [previous row]
   (and previous (or (and (:live previous) (not (:live row)))
+                    (and (:app? row) (not (:app? previous)))   ; apps after menu results: see apps-start?
                     (> (or (:section row) 0) (or (:section previous) 0)))))
 
 (defn result-layout
@@ -113,8 +114,8 @@
       (cui/end! ui)
       (finally (cui/end! ui)))))
 
-(defn row! [ui id {:keys [icon label display-shortcut warn state subtitle path texture running-progress] :as row}
-            selected? actionable? width]
+(defn- row* [ui id {:keys [icon label display-shortcut warn state subtitle path texture running-progress] :as row}
+             selected? actionable? width]
   (let [height (or (:row-height row) (row-height row))
         detail (single-line (or (not-empty subtitle) path))
         detail-width (min (max 0 (quot width 2)) (* 8 (count detail)))
@@ -147,6 +148,29 @@
         (finally (cui/end! ui)))
       (and actionable? (panel/clicked? ui native-id))
       (finally (cui/end! ui)))))
+
+(defn apps-start?
+  "Whether `row` is the first app after menu results, which a visible divider sets apart."
+  [previous row]
+  (boolean (and previous (:app? row) (not (:app? previous)))))
+
+(defn divider!
+  "A visible hairline; CUI's own separator takes the palette's border, which matches the background."
+  [ui id]
+  (panel/begin! ui id {:height 1 :background :border})
+  (cui/end! ui))
+
+(defn row!
+  "Draw a result row; return whether it was clicked. A `:divider?` row starts the apps
+  in a paged list, whose fixed row height leaves no room for a separate divider."
+  [ui id {:keys [divider?] :as row} selected? actionable? width]
+  (if divider?
+    (do (panel/begin! ui (str id "-divided") {:height (:row-height row)})
+        (try
+          (divider! ui "divider")
+          (row* ui id (assoc row :row-height (dec (:row-height row))) selected? actionable? width)
+          (finally (cui/end! ui))))
+    (row* ui id row selected? actionable? width)))
 
 (defn file-preview! [ui width path {:keys [notice detail image lines working?]}]
   (cui/column! ui "file-preview" {:width width :pad 12 :gap 4 :surface? true})

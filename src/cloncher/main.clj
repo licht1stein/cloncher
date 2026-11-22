@@ -369,17 +369,23 @@
         prefix (get-in view [:jump :prefix] "")
         progress (:refresh-progress view)]
     (doseq [i (range first end)]
-      (let [row (nth rows i)
+      (let [previous (get rows (dec i))
+            row (nth rows i)
+            section-start? (ui-view/section-start? previous row)
+            apps-start? (ui-view/apps-start? previous row)
             shortcut (:shortcut row)
             row (cond-> row
                   row-height (assoc :row-height row-height)
+                  ;; A paged list has a fixed row height, so the row draws its own divider.
+                  (and row-height apps-start?) (assoc :divider? true)
                   (and (= (:view-id progress) (:id view)) (= (:row-key progress) (row-key row)))
                   (assoc :running-progress progress)
                   (and shortcut (str/starts-with? shortcut prefix))
                   (assoc :display-shortcut (subs shortcut (count prefix)))
-                  (:app-icon row) (assoc :texture (row-texture! (:icons session) ui (:app-icon row))))
-            previous (get rows (dec i))]
-        (when (and (not row-height) (ui-view/section-start? previous row)) (cui/separator! ui))
+                  (:app-icon row) (assoc :texture (row-texture! (:icons session) ui (:app-icon row))))]
+        (cond row-height nil
+              apps-start? (ui-view/divider! ui (str (:id view) "-apps"))
+              section-start? (cui/separator! ui))
         (when (ui-view/row! ui (str (:id view) "-" i) row (= i index) (boolean (actionable? row)) width)
           (vreset! clicked row))))
     @clicked))

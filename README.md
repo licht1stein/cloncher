@@ -83,7 +83,7 @@ Type `/` to start with recent files. Narrow the list by typing, preview the sele
 
 | Key | What it does |
 | --- | --- |
-| Type at the root | Search apps and actions across searchable submenus. [Watch the menu demo](docs/media/navigation.mp4). |
+| Type at the root | Search apps and actions across searchable submenus. Menu actions come first, with a divider above the apps. [Watch the menu demo](docs/media/navigation.mp4). |
 | `;` then a row label | Jump to the labeled result. You can also hold Alt and type the label. |
 | `/` · `@` · `=` | Open Files, Projects, or calculator history from the root. |
 | `>` · `>>` · `>>>` | Enter a command or browse history for terminal or background execution. |
