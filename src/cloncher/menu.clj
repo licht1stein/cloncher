@@ -10,6 +10,7 @@
             [cloncher.json :as json]
             [cloncher.search :as search]
             [cloncher.note :as note]
+            [cloncher.palette :as palette]
             [cloncher.sources :as sources]
             [cloncher.timer-overlay :as overlay]
             [cloncher.desktop :as desktop-repl]))
@@ -715,6 +716,21 @@
   [value]
   (str/replace value #"([\\;,:\"])" "\\\\$1"))
 
+(defn- qr-colors
+  "qrencode colors from the launcher palette: the lighter of the accent and the
+  background behind darker modules, so scanners see the usual dark-on-light code.
+  Black on white without a palette."
+  []
+  (let [colors (palette/load-colors)
+        accent (some-> (get colors 11) (subvec 0 3))
+        background (some-> (get colors 1) (subvec 0 3))
+        luminance (fn [[r g b]] (+ (* 0.2126 r) (* 0.7152 g) (* 0.0722 b)))
+        hex (fn [rgb] (apply str (map #(format "%02x" %) rgb)))]
+    (if (and accent background)
+      (let [[light dark] (sort-by luminance > [accent background])]
+        {:background (hex light) :foreground (hex dark)})
+      {:background "ffffff" :foreground "000000"})))
+
 (defn- wifi-qr-preview
   "The standard `WIFI:` QR code for the network, as SVG for the preview pane. The
   password reaches qrencode on stdin and the SVG stays in memory: nothing in argv,
@@ -737,8 +753,10 @@
         :else
         (let [payload (str "WIFI:T:" type ";S:" (wifi-qr-escape ssid) ";"
                            (when (not= "nopass" type) (str "P:" (wifi-qr-escape password) ";")) ";")
+              {:keys [background foreground]} (qr-colors)
               {:keys [exit out]} (p/sh {:in payload :continue true}
-                                       "qrencode" "--type" "SVG" "--margin" "2" "--output" "-")]
+                                       "qrencode" "--type" "SVG" "--margin" "2" "--output" "-"
+                                       (str "--background=" background) (str "--foreground=" foreground))]
           (if (zero? exit)
             {:detail (str "Scan to join  ·  " ssid) :svg out}
             {:notice "Could not draw the QR code. Is qrencode installed?"}))))
@@ -758,19 +776,67 @@
                           (connection-command 12 "nmcli" "--wait" "8"
                                               "connection" "delete" "uuid" uuid)))))
 
+(defn- wifi-details
+  "Rows describing the connected network, read without secrets: signal and rate, band
+  and channel, security, addresses, gateway, DNS, BSSID and MAC. Enter copies a value."
+  [{:keys [device bssid security]}]
+  (let [link (future (connection-command 3 "nmcli" "--get-values" "IN-USE,CHAN,FREQ,RATE,SIGNAL"
+                                         "device" "wifi" "list" "ifname" device "--rescan" "no"))
+        shown (connection-command 3 "nmcli" "--terse" "--escape" "no" "--fields"
+                                  "GENERAL.HWADDR,GENERAL.CON-UUID,IP4.ADDRESS,IP4.GATEWAY,IP4.DNS,IP6.ADDRESS,IP6.GATEWAY"
+                                  "device" "show" device)
+        ;; `IP4.ADDRESS[1]:192.168.2.103/24`: values keep their own colons.
+        fields (when (zero? (:exit shown))
+                 (reduce (fn [fields line]
+                           (if-let [[_ name value] (re-matches #"([A-Z0-9.-]+)(?:\[\d+\])?:(.*)" line)]
+                             (cond-> fields (not (str/blank? value)) (update name (fnil conj []) value))
+                             fields))
+                         {} (str/split-lines (:out shown))))
+        uuid (first (get fields "GENERAL.CON-UUID"))
+        key-mgmt (when uuid
+                   (str/trim (:out (connection-command 3 "nmcli" "--get-values" "802-11-wireless-security.key-mgmt"
+                                                       "connection" "show" "uuid" uuid))))
+        [_ channel frequency rate signal] (some #(when (str/starts-with? % "*") (str/split % #":"))
+                                                (str/split-lines (:out @link)))
+        frequency-mhz (some-> frequency (str/replace #"\D" "") not-empty parse-long)
+        row (fn [icon value what] (when (seq value)
+                                    {:icon icon :label value :subtitle what :section 2
+                                     :hint "copy" :action #(copy! value)}))]
+    (->> (concat
+          [(row "\uF012" (when signal (str signal "%" (when rate (str " · " rate)))) "signal · rate")
+           (row "\uF1EB" (when frequency-mhz
+                           (str (if (>= frequency-mhz 5925) "6" (if (>= frequency-mhz 4900) "5" "2.4"))
+                                " GHz · channel " channel))
+                "band")
+           (row "\uF023" (str/join " · " (remove str/blank?
+                                                [(if (str/blank? security) "open" security)
+                                                 ({"sae" "SAE" "wpa-psk" "PSK" "wpa-eap" "802.1X" "owe" "OWE"
+                                                   "none" "WEP"} key-mgmt)]))
+                "security")]
+          (for [address (get fields "IP4.ADDRESS")] (row "\uF0E8" address "IPv4"))
+          [(row "\uF0E8" (first (get fields "IP4.GATEWAY")) "IPv4 gateway")
+           (row "\uF0AC" (str/join ", " (get fields "IP4.DNS")) "DNS")]
+          (for [address (get fields "IP6.ADDRESS")] (row "\uF0E8" address "IPv6"))
+          [(row "\uF1EB" bssid "BSSID")
+           (row "\uF2DB" (first (get fields "GENERAL.HWADDR")) "MAC")])
+         (keep identity)
+         vec)))
+
 (defn- wifi-network-menu
-  "The connected network's actions, with its QR code beside them from the moment they open."
+  "The connected network's actions and details, with its QR code beside them from the
+  moment they open."
   [{:keys [ssid] :as network}]
   (let [qr {:id (str "wifi qr " ssid) :load #(wifi-qr-preview network)}]
     {:prompt ssid
      :items (mapv #(assoc % :preview qr :volatile true)
-                  [{:icon "󰅍" :label "Copy access details" :hint "copy network and password"
-                    :action #(copy-wifi-access! network)}
-                   {:icon "󰖪" :label "Disconnect" :hint "disconnect from this network"
-                    :action #(disconnect-wifi! network)}
-                   {:icon "󰆴" :label "Forget" :hint "remove saved connection and password"
-                    :subtitle "confirmation required · also disconnects"
-                    :warn true :action #(forget-wifi! network)}])}))
+                  (into [{:icon "󰅍" :label "Copy access details" :hint "copy network and password"
+                          :action #(copy-wifi-access! network)}
+                         {:icon "󰖪" :label "Disconnect" :hint "disconnect from this network"
+                          :action #(disconnect-wifi! network)}
+                         {:icon "󰆴" :label "Forget" :hint "remove saved connection and password"
+                          :subtitle "confirmation required · also disconnects"
+                          :warn true :action #(forget-wifi! network)}]
+                        (wifi-details network)))}))
 
 (defn get-wifi-items []
   (let [radio (future (connection-command 3 "nmcli" "radio" "wifi"))
