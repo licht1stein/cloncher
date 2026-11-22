@@ -53,6 +53,12 @@ Select the active timer above Apps to pause, resume, restart, or close it. When 
 
 With a running stopwatch selected, press **Ctrl+Enter** to record a lap, or choose **Record lap** in its controls. The card shows the latest split. **Lap history** shows each split and its cumulative time to the hundredth of a second. Paused time doesn’t count; restarting clears the laps.
 
+### Jot a note into your scratchpad
+
+Search for **Quick note**, or open **Notes**. A translucent editor opens in the middle of the screen in the launcher's palette. Press **Ctrl+Enter** to append the note to your scratchpad under a heading with an inactive Org timestamp, such as `* [2026-11-22 Sun 14:05]`. Press **Esc** or the close button to discard it. If the file can't be written, the editor stays open with your text.
+
+Set the file with a top-level `:scratchpad` path in your config, for example `:scratchpad "~/org/scratchpad.org"`. Like the timer, the editor is a Wayland layer-shell overlay. It takes the keyboard until you save or dismiss it.
+
 ### Wi-Fi stays in the menu
 
 See signal strength, security, and the connected network at a glance. Start a scan and the spinner appears on the scan row itself. The result list refreshes in place when the scan finishes.

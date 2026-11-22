@@ -1,5 +1,7 @@
 ;; Cloncher menu configuration. Items appear in the order listed.
-{:menus
+{;; Quick note appends timestamped entries to this Org file.
+ ;; :scratchpad "~/org/scratchpad.org"
+ :menus
  {:main {:prompt "Menu"
           :items [{:label "Apps" :icon "󰀻" :action {:menu :apps} :root-only? true}
                     {:icon "󰖯" :label "Windows" :action {:menu :windows}}
@@ -164,7 +166,9 @@
 
    :notes
    {:prompt "Notes"
-    :items [{:icon "" :section 1 :label "Scratchpad" :action {:exec ["emacsclient" "-c" "-e" "(find-file-point-max (user-data \"scratchpad.org\"))"]}}
+    :items [{:icon "" :section 1 :label "Quick note" :subtitle "append to scratchpad"
+             :search "capture jot" :action {:call :notes/scratchpad}}
+            {:icon "" :section 1 :label "Scratchpad" :action {:exec ["emacsclient" "-c" "-e" "(find-file-point-max (user-data \"scratchpad.org\"))"]}}
             {:icon "" :section 1 :label "Freewriting" :action {:exec ["emacsclient" "-c" "-e" "(find-file-point-max (user-data \"free.org\"))"]}}
             {:icon "" :section 1 :label "Journal" :action {:exec ["emacsclient" "-c" "~/Documents/journal.org"]}}
             {:icon "" :section 1 :label "New Note" :action {:exec ["emacsclient" "-c" "-e" "(denote)"]}}

@@ -209,6 +209,25 @@
         {:changed? (bit-test events 0) :submitted? (bit-test events 1)})
       (finally (ffi/free placeholder) (ffi/free options)))))
 
+(defn editor-field!
+  "A borderless multi-line field that fills its parent. Ctrl+Enter submits."
+  [ui id buffer placeholder]
+  (let [options (ffi/alloc (ffi/sizeof field-layout))
+        placeholder (ffi/string->ptr placeholder)]
+    (try
+      (memset options 0 (ffi/sizeof field-layout))
+      (ffi/write-field options field-layout :placeholder placeholder)
+      (ffi/write-field options field-layout :autofocus true)
+      (ffi/write-field options field-layout :height -1.0)
+      (let [events (bare-field* ui (make-id ui id) buffer capacity options true 1 ffi/null)]
+        {:changed? (bit-test events 0) :submitted? (bit-test events 1)})
+      (finally (ffi/free placeholder) (ffi/free options)))))
+
+(defn input-buffer
+  "An empty field buffer owned by the caller; release it with `ffi/free`."
+  []
+  (doto (ffi/alloc capacity) (set-input! "")))
+
 (def ^:private keys-mask {:up 1 :down 2 :enter 4 :tab 8 :escape 16 :backspace 32})
 
 (defn take-keys! [ui requested]

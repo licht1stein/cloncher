@@ -59,7 +59,8 @@ struct launcher_layer {
     struct wl_compositor *compositor;
     struct wl_shm *shm;
     struct timer_buffer buffers[2];
-    bool timer;
+    bool timer;   /* any translucent overlay: the timer, or the note editor when `note` */
+    bool note;
     bool configured;
 };
 
@@ -67,9 +68,15 @@ static struct launcher_layer layer;
 static bool defer_layer;
 
 static const char timer_app_id[] = "cloncher.timer-overlay";
+static const char note_app_id[] = "cloncher.note";
 
+bool cloncher_is_note_overlay(const char *app_id) {
+    return app_id && !strcmp(app_id, note_app_id);
+}
+
+/* Both overlays share the translucent, fixed-size presentation path. */
 bool cloncher_is_timer_overlay(const char *app_id) {
-    return app_id && !strcmp(app_id, timer_app_id);
+    return app_id && (!strcmp(app_id, timer_app_id) || cloncher_is_note_overlay(app_id));
 }
 
 bool cloncher_layer_active(void) { return layer.role != NULL; }
@@ -212,14 +219,14 @@ bool cloncher_attach_layer(int width, int height)
     if (!layer.shell || !layer.surface || layer.role)
         return false;
     struct wl_region *input = NULL;
-    if (layer.timer) {
+    if (layer.timer && !layer.note) {   /* the timer lets clicks through */
         if (!layer.compositor || !(input = wl_compositor_create_region(layer.compositor)))
             return SDL_SetError("could not create an empty Wayland input region");
     }
     /* NULL selects the compositor's default output, rather than pinning a monitor. */
     layer.role = wl_proxy_marshal_flags(layer.shell, 0, &layer_surface_interface, 1, 0,
                                         NULL, layer.surface, NULL, LAYER_OVERLAY,
-                                        layer.timer ? timer_app_id : "launcher");
+                                        layer.note ? note_app_id : layer.timer ? timer_app_id : "launcher");
     if (input) {
         if (layer.role) wl_surface_set_input_region(layer.surface, input);
         wl_region_destroy(input);
@@ -228,14 +235,15 @@ bool cloncher_attach_layer(int width, int height)
         return false;
     wl_proxy_add_listener(layer.role, (void (**)(void))&layer_listener, &layer);
     wl_proxy_marshal_flags(layer.role, SET_SIZE, NULL, 1, 0, (uint32_t)width, (uint32_t)height);
+    /* The note editor is unanchored, so the compositor centers it. */
     wl_proxy_marshal_flags(layer.role, SET_ANCHOR, NULL, 1, 0,
-                           layer.timer ? ANCHOR_TOP | ANCHOR_RIGHT : ANCHOR_TOP);
+                           layer.note ? 0 : layer.timer ? ANCHOR_TOP | ANCHOR_RIGHT : ANCHOR_TOP);
     wl_proxy_marshal_flags(layer.role, SET_MARGIN, NULL, 1, 0,
-                           layer.timer ? 16 : 140, layer.timer ? 16 : 0, 0, 0);
+                           layer.note ? 0 : layer.timer ? 16 : 140, layer.timer && !layer.note ? 16 : 0, 0, 0);
     /* Follow the bar's reserved space without reserving any ourselves. */
     wl_proxy_marshal_flags(layer.role, SET_EXCLUSIVE_ZONE, NULL, 1, 0, layer.timer ? 0 : -1);
     wl_proxy_marshal_flags(layer.role, SET_KEYBOARD_INTERACTIVITY, NULL, 1, 0,
-                           layer.timer ? KEYBOARD_NONE : KEYBOARD_EXCLUSIVE);
+                           layer.timer && !layer.note ? KEYBOARD_NONE : KEYBOARD_EXCLUSIVE);
     wl_surface_commit(layer.surface);
     return wl_display_roundtrip(layer.display) >= 0 && layer.configured;
 }
@@ -277,6 +285,7 @@ SDL_Window *cloncher_create_window(const char *title, int width, int height, SDL
     struct wl_surface *surface = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, NULL);
     if (display && surface) {
         layer.timer = timer;
+        layer.note = cloncher_is_note_overlay(app_id);
         struct wl_registry *registry = wl_display_get_registry(display);
         wl_registry_add_listener(registry, &registry_listener, &layer);
         int ready = wl_display_roundtrip(display);

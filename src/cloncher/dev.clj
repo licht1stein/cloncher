@@ -4,6 +4,7 @@
             [cloncher.cui :as cui]
             [cloncher.main :as app]
             [cloncher.menu :as menu]
+            [cloncher.note :as note]
             [cloncher.palette :as palette]
             [cloncher.view :as view]
             [jolt.nrepl :as nrepl]))
@@ -13,6 +14,8 @@
 (defonce ^:private session (app/session))
 (defonce ^:private reload-lock (Object.))
 (defonce ^:private configuration (atom nil))
+(defonce ^:private note-buffer (delay (cui/input-buffer)))
+(defonce ^:private note-entry (atom nil))
 
 (defn state [] (app/state session))
 
@@ -35,7 +38,7 @@
                         cloncher.desktop cloncher.menu cloncher.sources cloncher.commands
                         cloncher.files cloncher.preview cloncher.edit cloncher.lisp
                         cloncher.machine cloncher.usage cloncher.view-cache cloncher.view
-                        cloncher.main cloncher.dev]]
+                        cloncher.note cloncher.main cloncher.dev]]
       (require namespace :reload)))
   (reload-config!))
 
@@ -109,6 +112,26 @@
   (cui/column! ui id {:height 0 :pad 0 :gap 0})
   (cui/end! ui))
 
+(defn- note-preview!
+  "The quick-note card beside the launcher. Saving shows the entry instead of writing the scratchpad."
+  [ui]
+  (cui/column! ui "note-preview" {:width 0 :height 0 :pad 24 :gap 12})
+  (try
+    (cui/heading! ui "Note preview" 3)
+    (cui/apply-colors! ui (palette/load-colors))
+    (let [buffer @note-buffer
+          now (java.time.LocalDateTime/now)]
+      (case (note/preview! ui buffer {:title "Scratchpad" :at now})
+        :save (do (reset! note-entry (or (note/entry (cui/input-value buffer) now) "Nothing to append"))
+                  (cui/clear-input! buffer)
+                  (cui/redraw! ui))
+        :cancel (do (reset! note-entry "Cancelled") (cui/clear-input! buffer) (cui/redraw! ui))
+        nil)
+      (cui/wake-in! ui (- 60.0 (.getSecond now))))
+    (when-let [entry @note-entry]
+      (cui/caption! ui (str "Would append · " entry)))
+    (finally (cui/end! ui))))
+
 (defn- render-preview!
   [ui buffer]
   (let [{:keys [open reconfigure]} (first (swap-vals! control dissoc :open :reconfigure))
@@ -132,6 +155,7 @@
               (open-preview! ui buffer {:kind :off})))
           (off-panel! ui))
         (finally (cui/end! ui)))
+      (note-preview! ui)
       (spacer! ui "right-gutter")
       (finally (cui/end! ui))))
   (screenshot-frame! ui))

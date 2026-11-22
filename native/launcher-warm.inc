@@ -14,6 +14,7 @@ extern bool cloncher_layer_ready(void);
 extern bool cloncher_attach_layer(int, int);
 extern void cloncher_defer_layer(bool);
 extern bool cloncher_is_timer_overlay(const char *);
+extern bool cloncher_is_note_overlay(const char *);
 extern void cui__plat_show(cui_app *);
 
 static bool configure_timer_overlay(cui_app_desc *desc) {
@@ -21,8 +22,13 @@ static bool configure_timer_overlay(cui_app_desc *desc) {
         fprintf(stderr, "%s requires Wayland\n", desc->app_id);
         return false;
     }
-    desc->width = desc->min_width = 300;
-    desc->height = desc->min_height = 108;
+    /* The note editor keeps the size Jolt asks for; the timer card is drawn at 300×108. */
+    if (!cloncher_is_note_overlay(desc->app_id)) {
+        desc->width = 300;
+        desc->height = 108;
+    }
+    desc->min_width = desc->width;
+    desc->min_height = desc->height;
     /* SDL's normal-priority hint in the template must not be overridden by
      * the environment: this ID selects the no-fallback SDL window adapter. */
     return SDL_SetHintWithPriority(SDL_HINT_APP_ID, desc->app_id, SDL_HINT_OVERRIDE);

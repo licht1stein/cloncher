@@ -8,6 +8,7 @@
             [cloncher.config :as config]
             [cloncher.json :as json]
             [cloncher.search :as search]
+            [cloncher.note :as note]
             [cloncher.sources :as sources]
             [cloncher.timer-overlay :as overlay]
             [cloncher.desktop :as desktop-repl]))
@@ -112,6 +113,20 @@
     (catch Exception error
       (binding [*out* *err*] (println "cloncher:" (ex-message error)))
       (try (p/sh {:continue true} "notify-send" "--" "Could not open timer" (ex-message error))
+           (catch Exception _ nil)))))
+
+(declare configuration)
+
+(defn- scratchpad-note!
+  "Open the quick-note editor for the configured `:scratchpad` Org file."
+  []
+  (try
+    (let [path (or (:scratchpad (configuration))
+                   (throw (ex-info (str "Set :scratchpad in " (config/path) " to an Org file") {})))]
+      (note/start! (str/replace-first path #"^~(?=/)" (or (p/getenv "HOME") (str (fs/home))))))
+    (catch Exception error
+      (binding [*out* *err*] (println "cloncher:" (ex-message error)))
+      (try (p/sh {:continue true} "notify-send" "--" "Could not open the note editor" (ex-message error))
            (catch Exception _ nil)))))
 
 (defn- countdown-action []
@@ -363,8 +378,6 @@
       base-items)))
 
 ;; Tailscale
-
-(declare configuration)
 
 (defn- tailnets []
   (:tailnets (configuration)))
@@ -1083,6 +1096,7 @@
    :wifi/scan scan-wifi! :bluetooth/scan scan-bluetooth!
    :timers/remind remind-me-action :timers/sleep sleep-in-action
    :timers/countdown countdown-action :timers/stopwatch stopwatch-action
+   :notes/scratchpad scratchpad-note!
    :config/edit #(p/sh "emacsclient" "-c" (str (config/path)))})
 
 (defn- command-args [argv]
@@ -1148,7 +1162,7 @@
               [:action :alt-action]))))
 
 (defn- compile-configuration [text]
-  (let [{:keys [menus tailnets] :or {tailnets []}} (config/read-config text)]
+  (let [{:keys [menus tailnets scratchpad] :or {tailnets []}} (config/read-config text)]
     (when-not (and (map? menus) (contains? menus :main))
       (throw (ex-info "Expected a :menus map containing :main" {})))
     (when-not (and (vector? tailnets)
@@ -1158,13 +1172,16 @@
                                           (map entry [:label :tailnet :account]))))
                            tailnets))
       (throw (ex-info "Expected :tailnets to contain :label, :tailnet and :account strings" {})))
+    (when-not (or (nil? scratchpad) (and (string? scratchpad) (not (str/blank? scratchpad))))
+      (throw (ex-info "Expected :scratchpad to be the path of an Org file" {})))
     (let [menus (into {} (map (fn [[key menu]]
                                 (when-not (and (keyword? key) (nil? (namespace key))
                                                (map? menu) (string? (:prompt menu)) (vector? (:items menu)))
                                   (throw (ex-info (str "Invalid menu " key) {:menu key})))
                                 [key (update menu :items #(mapv (partial compile-item menus key) %))])) menus)
           root-items (search/index-rows (remove :provider (get-in menus [:main :items])))]
-      {:menus menus :tailnets tailnets :root-items root-items :revision (str (hash text))})))
+      {:menus menus :tailnets tailnets :scratchpad scratchpad
+       :root-items root-items :revision (str (hash text))})))
 
 (def ^:private defaults (delay (compile-configuration config/default-text)))
 (defonce ^:private configuration-files (atom {}))

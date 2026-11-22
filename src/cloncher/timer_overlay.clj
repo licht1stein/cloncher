@@ -1,7 +1,6 @@
 (ns cloncher.timer-overlay
   "One click-through timer per launcher session, owned by a separate CUI process."
   (:require [babashka.fs :as fs]
-            [clojure.java.io :as io]
             [clojure.string :as str]
             [cloncher.cui :as cui]
             [cloncher.json :as json]
@@ -32,27 +31,10 @@
 (defn control! [id op]
   (request! {:id id :op op} 1000))
 
-(defn- worker-command []
-  (let [exe (.getCanonicalFile (io/file "/proc/self/exe"))]
-    (if (= "jolt" (.getName exe))
-      (let [resources (.getParentFile (.getParentFile (io/file (io/resource "cloncher/default.edn"))))
-            source (io/file (.getParentFile resources) "src")]
-        [(str exe) "-Srepro" "-Scp" (str source ":" resources) "-m" "cloncher.main"])
-      [(str exe)])))
-
 (defn start! [kind seconds label]
   (let [message {:op "start" :kind kind :seconds seconds :label label}]
     (when-not (:id (request! message 1000))
-      (let [child (apply p/process
-                         {:in :close :out :stream :err :discard
-                          :env (merge (p/environment)
-                                      (select-keys (System/getenv) ["CLONCHER_ROOT" "CLONCHER_CUI_LIBRARY"]))}
-                         (into (worker-command) ["--timer-overlay" (endpoint) (json/generate-string message)]))
-            reply (future
-                    (with-open [stream (io/reader (:out child))]
-                      (.readLine stream)))
-            ready (deref reply 6000 ::timeout)]
-        (when (= ::timeout ready) (.destroy (:proc child)))
+      (let [ready (p/start-helper! ["--timer-overlay" (endpoint) (json/generate-string message)] 6000)]
         (when-not (or (= "ready" ready)
                       (and (= "busy" ready) (:id (request! message 1000))))
           (throw (ex-info unavailable {})))))))

@@ -16,6 +16,7 @@
             [cloncher.lisp :as lisp]
             [cloncher.machine :as machine]
             [cloncher.menu :as menu]
+            [cloncher.note :as note]
             [cloncher.search :as search]
             [cloncher.socket :as socket]
             [cloncher.sources :as sources]
@@ -855,10 +856,16 @@
 
 (defn -main [& args]
   (System/exit
-    (try (if (= "--timer-overlay" (first args))
+    (try (case (first args)
+           "--timer-overlay"
            (let [[_ path initial & extra] args]
              (when-not (and path initial (empty? extra)) (throw (ex-info usage {})))
              (timer-overlay/worker! path initial load-cui!)
+             0)
+           "--note-editor"
+           (let [[_ path & extra] args]
+             (when-not (and path (empty? extra)) (throw (ex-info usage {})))
+             (note/worker! path load-cui!)
              0)
            (run args))
          (catch Exception error
