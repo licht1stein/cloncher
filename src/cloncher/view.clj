@@ -12,6 +12,7 @@
 (def ^:private prompt-height 40)
 (def ^:private status-height 21)
 (def ^:private separator-height 1)
+(def ^:private apps-divider-height 13)   ; a hairline with 6 points of air above and below
 (def ^:private chrome-height (+ prompt-height status-height separator-height))
 (def ^:private file-preview-minimum 300)
 
@@ -34,23 +35,37 @@
     (cui/prompt-field! ui id buffer (if secret? "" (str/replace (str prompt "…") #"…+$" "…")) secret?)
     (finally (cui/end! ui))))
 
+(def ^:private icon-size
+  "App icons and menu glyphs look the same size: an app icon carries its own margin,
+  while a glyph fills its em box, so glyphs are set a little smaller."
+  20)
+(def ^:private glyph-size (- icon-size 4))
+
 (defn row-height [{:keys [app? icon]}]
   (cond
-    app? 30
+    app? 27
     (search/emoji? icon) 41
     :else 24))
 
 (defn section-start? [previous row]
   (and previous (or (and (:live previous) (not (:live row)))
-                    (and (:app? row) (not (:app? previous)))   ; apps after menu results: see apps-start?
                     (> (or (:section row) 0) (or (:section previous) 0)))))
+
+(defn apps-start?
+  "Whether `row` is the first app after menu results, which a visible divider sets apart."
+  [previous row]
+  (boolean (and previous (:app? row) (not (:app? previous)))))
+
+(defn- boundary-height [previous row]
+  (cond (apps-start? previous row) apps-divider-height
+        (section-start? previous row) separator-height
+        :else 0))
 
 (defn result-layout
   "Lay out results against a height budget independent of the current window size."
   [height rows]
   (let [row-heights (mapv row-height rows)
-        plain-height (+ (reduce + row-heights)
-                        (* separator-height (count (filter identity (map section-start? rows (next rows))))))
+        plain-height (+ (reduce + row-heights) (reduce + (map boundary-height rows (next rows))))
         available (max 0 (- height chrome-height))]
     (if (<= plain-height available)
       {:page-size (max 1 (count rows))
@@ -130,9 +145,9 @@
         (panel/begin! ui "glyph" {:row? true :width 30 :height height :pad-x 2})
         (cond
           running-progress (do (cui/spacer! ui) (cui/spinner! ui 12.5) (cui/spacer! ui))
-          texture (panel/image! ui texture 23)
+          texture (do (cui/spacer! ui) (panel/image! ui texture icon-size) (cui/spacer! ui))
           :else (panel/text! ui (or icon "") {:width :fill :center? true :color (if state :secondary :accent)
-                                              :size (if (= 41 height) 26 13)}))
+                                              :size (if (= 41 height) 26 glyph-size)}))
         (cui/end! ui)
         (panel/text! ui (single-line (or (:label running-progress) label))
                      {:width :fill :color (cond state :secondary selected? :selected-text :else :foreground)})
@@ -149,25 +164,28 @@
       (and actionable? (panel/clicked? ui native-id))
       (finally (cui/end! ui)))))
 
-(defn apps-start?
-  "Whether `row` is the first app after menu results, which a visible divider sets apart."
-  [previous row]
-  (boolean (and previous (:app? row) (not (:app? previous)))))
-
-(defn divider!
+(defn- hairline!
   "A visible hairline; CUI's own separator takes the palette's border, which matches the background."
   [ui id]
   (panel/begin! ui id {:height 1 :background :border})
   (cui/end! ui))
 
+(defn divider!
+  "The divider above the first app, inset and with air on both sides."
+  [ui id]
+  (panel/begin! ui id {:height apps-divider-height :pad-x 14 :pad-y 6})
+  (try (hairline! ui "line")
+       (finally (cui/end! ui))))
+
 (defn row!
   "Draw a result row; return whether it was clicked. A `:divider?` row starts the apps
-  in a paged list, whose fixed row height leaves no room for a separate divider."
+  in a paged list: rows there share the tallest row's height, which leaves room for a
+  hairline but not for the divider's spacing."
   [ui id {:keys [divider?] :as row} selected? actionable? width]
   (if divider?
     (do (panel/begin! ui (str id "-divided") {:height (:row-height row)})
         (try
-          (divider! ui "divider")
+          (hairline! ui "divider")
           (row* ui id (assoc row :row-height (dec (:row-height row))) selected? actionable? width)
           (finally (cui/end! ui))))
     (row* ui id row selected? actionable? width)))
