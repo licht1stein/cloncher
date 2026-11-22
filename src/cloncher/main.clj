@@ -15,6 +15,7 @@
             [cloncher.palette :as palette]
             [cloncher.panel :as panel]
             [cloncher.lisp :as lisp]
+            [cloncher.key-overlay :as key-overlay]
             [cloncher.machine :as machine]
             [cloncher.menu :as menu]
             [cloncher.note :as note]
@@ -27,7 +28,7 @@
             [cloncher.view-cache :as view-cache]))
 
 (def usage
-  "Usage: cloncher [root | apps | menu [NAME] | files | projects | projects add [DIRECTORY] | project-add [DIRECTORY] | rename-workspace | note | clipboard-capture | dmenu [-p PROMPT] | secret [-p PROMPT] | daemon | ping | close | screenshot PATH | --screenshot PATH]")
+  "Usage: cloncher [root | apps | menu [NAME] | files | projects | projects add [DIRECTORY] | project-add [DIRECTORY] | rename-workspace | note | keys | clipboard-capture | dmenu [-p PROMPT] | secret [-p PROMPT] | daemon | ping | close | screenshot PATH | --screenshot PATH]")
 
 (defn parse-args [args]
   (let [args (if (= ["projects" "add"] (vec (take 2 args)))
@@ -50,7 +51,7 @@
       "screenshot" (if argument {:mode :control} (throw (ex-info usage {})))
       "--screenshot" (if argument {:mode :launcher :kind :root :screenshot argument}
                          (throw (ex-info usage {})))
-      ("ping" "close" "daemon" "rename-workspace" "note" "clipboard-capture")
+      ("ping" "close" "daemon" "rename-workspace" "note" "keys" "clipboard-capture")
       (if argument (throw (ex-info usage {})) {:mode (keyword command)})
       "--help" {:mode :help}
       (throw (ex-info usage {})))))
@@ -853,6 +854,7 @@
       ;; The editor runs in this process; the hotkey client already started a fresh one.
       :note (do (menu/scratchpad-note! #(note/worker! % load-cui!)) 0)
       :clipboard-capture (do (clipboard/capture!) 0)
+      :keys (do (menu/toggle-key-display!) 0)
       :ping (or (:exit (daemon-reply args [])) 1)
       :close (or (:exit (daemon-reply args [])) 0)
       :control (or (:exit (daemon-reply args [])) 3)
@@ -903,6 +905,10 @@
              (when-not (and path (empty? extra)) (throw (ex-info usage {})))
              (note/worker! path load-cui!)
              0)
+           "--key-overlay"
+           (do (when (next args) (throw (ex-info usage {})))
+               (key-overlay/worker! load-cui!)
+               0)
            (run args))
          (catch Exception error
            (binding [*out* *err*] (println "cloncher:" (ex-message error)))

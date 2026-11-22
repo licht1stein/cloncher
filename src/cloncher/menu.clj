@@ -9,6 +9,7 @@
             [cloncher.config :as config]
             [cloncher.json :as json]
             [cloncher.search :as search]
+            [cloncher.key-overlay :as key-overlay]
             [cloncher.note :as note]
             [cloncher.palette :as palette]
             [cloncher.sources :as sources]
@@ -115,6 +116,16 @@
     (catch Exception error
       (binding [*out* *err*] (println "cloncher:" (ex-message error)))
       (try (p/sh {:continue true} "notify-send" "--" "Could not open timer" (ex-message error))
+           (catch Exception _ nil)))))
+
+(defn toggle-key-display!
+  "Turn the on-screen key display on or off."
+  []
+  (try
+    (key-overlay/toggle!)
+    (catch Exception error
+      (binding [*out* *err*] (println "cloncher:" (ex-message error)))
+      (try (p/sh {:continue true} "notify-send" "--" "Could not show keys" (ex-message error))
            (catch Exception _ nil)))))
 
 (declare configuration load-configuration!)
@@ -942,7 +953,9 @@
 
 (defn get-focus-items []
   (into [{:icon "󰥔" :label "Countdown" :subtitle "on-screen timer" :action countdown-action}
-         {:icon "󰔛" :label "Stopwatch" :subtitle "on-screen elapsed time" :action stopwatch-action}]
+         {:icon "󰔛" :label "Stopwatch" :subtitle "on-screen elapsed time" :action stopwatch-action}
+         {:icon "\uF11C" :label (str "Key display: " (if (key-overlay/running?) "On" "Off"))
+          :subtitle "pressed keys on screen, for recordings" :action toggle-key-display!}]
         (keep identity
               [(try (get-dnd-menu-item) (catch Exception _ nil))
                {:icon "󰅶" :label (str "Caffeine: " (if (caffeine-on?) "On" "Off")) :subtitle "keep awake"
@@ -1213,7 +1226,10 @@
         vpn (future (mullvad-connected?))
         timers (future (try (filterv :action (active-timer-items)) (catch Exception _ [])))]
     (->> (concat
-          [(overlay-item)]
+          [(overlay-item)
+           (when (key-overlay/running?)
+             {:icon "\uF11C" :label "Key display" :subtitle "on" :hint "turn off"
+              :search "keys keyboard screen recording" :action toggle-key-display!})]
           [(when (:recording @recording)
              {:icon "󰑊" :label "Stop recording" :subtitle "recording"
               :action (str wf-recorder-path " stop")})

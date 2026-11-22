@@ -38,7 +38,7 @@ static const struct wl_interface layer_surface_interface = {
 enum {
     SET_SIZE = 0, SET_ANCHOR = 1, SET_EXCLUSIVE_ZONE = 2, SET_MARGIN = 3,
     SET_KEYBOARD_INTERACTIVITY = 4, ACK_CONFIGURE = 6, DESTROY = 7,
-    ANCHOR_TOP = 1, ANCHOR_RIGHT = 8,
+    ANCHOR_TOP = 1, ANCHOR_BOTTOM = 2, ANCHOR_RIGHT = 8,
     KEYBOARD_NONE = 0, KEYBOARD_EXCLUSIVE = 1, LAYER_OVERLAY = 3
 };
 
@@ -59,8 +59,9 @@ struct launcher_layer {
     struct wl_compositor *compositor;
     struct wl_shm *shm;
     struct timer_buffer buffers[2];
-    bool timer;   /* any translucent overlay: the timer, or the note editor when `note` */
+    bool timer;   /* any translucent overlay: the timer, the key display when `keys`, the note editor when `note` */
     bool note;
+    bool keys;
     bool configured;
 };
 
@@ -69,14 +70,16 @@ static bool defer_layer;
 
 static const char timer_app_id[] = "cloncher.timer-overlay";
 static const char note_app_id[] = "cloncher.note";
+static const char keys_app_id[] = "cloncher.keys";
 
 bool cloncher_is_note_overlay(const char *app_id) {
     return app_id && !strcmp(app_id, note_app_id);
 }
 
-/* Both overlays share the translucent, fixed-size presentation path. */
+/* The overlays share the translucent, fixed-size presentation path. */
 bool cloncher_is_timer_overlay(const char *app_id) {
-    return app_id && (!strcmp(app_id, timer_app_id) || cloncher_is_note_overlay(app_id));
+    return app_id && (!strcmp(app_id, timer_app_id) || !strcmp(app_id, keys_app_id)
+                      || cloncher_is_note_overlay(app_id));
 }
 
 bool cloncher_layer_active(void) { return layer.role != NULL; }
@@ -226,7 +229,8 @@ bool cloncher_attach_layer(int width, int height)
     /* NULL selects the compositor's default output, rather than pinning a monitor. */
     layer.role = wl_proxy_marshal_flags(layer.shell, 0, &layer_surface_interface, 1, 0,
                                         NULL, layer.surface, NULL, LAYER_OVERLAY,
-                                        layer.note ? note_app_id : layer.timer ? timer_app_id : "launcher");
+                                        layer.note ? note_app_id : layer.keys ? keys_app_id
+                                        : layer.timer ? timer_app_id : "launcher");
     if (input) {
         if (layer.role) wl_surface_set_input_region(layer.surface, input);
         wl_region_destroy(input);
@@ -235,11 +239,14 @@ bool cloncher_attach_layer(int width, int height)
         return false;
     wl_proxy_add_listener(layer.role, (void (**)(void))&layer_listener, &layer);
     wl_proxy_marshal_flags(layer.role, SET_SIZE, NULL, 1, 0, (uint32_t)width, (uint32_t)height);
-    /* The note editor is unanchored, so the compositor centers it. */
+    /* The note editor is unanchored, so the compositor centers it. The key display
+     * mirrors the timer in the bottom right corner. */
     wl_proxy_marshal_flags(layer.role, SET_ANCHOR, NULL, 1, 0,
-                           layer.note ? 0 : layer.timer ? ANCHOR_TOP | ANCHOR_RIGHT : ANCHOR_TOP);
+                           layer.note ? 0 : layer.keys ? ANCHOR_BOTTOM | ANCHOR_RIGHT
+                           : layer.timer ? ANCHOR_TOP | ANCHOR_RIGHT : ANCHOR_TOP);
     wl_proxy_marshal_flags(layer.role, SET_MARGIN, NULL, 1, 0,
-                           layer.note ? 0 : layer.timer ? 16 : 140, layer.timer && !layer.note ? 16 : 0, 0, 0);
+                           layer.note || layer.keys ? 0 : layer.timer ? 16 : 140,
+                           layer.timer && !layer.note ? 16 : 0, layer.keys ? 16 : 0, 0);
     /* Follow the bar's reserved space without reserving any ourselves. */
     wl_proxy_marshal_flags(layer.role, SET_EXCLUSIVE_ZONE, NULL, 1, 0, layer.timer ? 0 : -1);
     wl_proxy_marshal_flags(layer.role, SET_KEYBOARD_INTERACTIVITY, NULL, 1, 0,
@@ -286,6 +293,7 @@ SDL_Window *cloncher_create_window(const char *title, int width, int height, SDL
     if (display && surface) {
         layer.timer = timer;
         layer.note = cloncher_is_note_overlay(app_id);
+        layer.keys = app_id && !strcmp(app_id, keys_app_id);
         struct wl_registry *registry = wl_display_get_registry(display);
         wl_registry_add_listener(registry, &registry_listener, &layer);
         int ready = wl_display_roundtrip(display);

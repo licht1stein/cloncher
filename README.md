@@ -53,6 +53,14 @@ Select the active timer above Apps to pause, resume, restart, or close it. When 
 
 With a running stopwatch selected, press **Ctrl+Enter** to record a lap, or choose **Record lap** in its controls. The card shows the latest split. **Lap history** shows each split and its cumulative time to the hundredth of a second. Paused time doesn’t count; restarting clears the laps.
 
+### Show your keys in a recording
+
+Open **Focus › Key display**, or bind a key to `cloncher keys`, which turns it on and off. A card in the bottom right corner, the timer's mirror image, shows what you type. Text you type collects into a run, chords show as `Ctrl + A` or `Hyper + Space`, and repeats count up as `← ×3`. A modifier tapped alone shows by itself, and Ctrl, Alt, Shift and Super together show as **Hyper**. The previous few entries stay on the card's top line. The card hides after a few quiet seconds, and like the timer, clicks go through it. While the display is on, the main menu has a row to turn it off.
+
+While Emacs has the focus, the card uses Emacs notation: `C-a`, `M-x`, `C-S-v`, `s-`, and `H-` for Hyper, with keys such as `RET`, `SPC`, and `<left>`. Keys that look like one sequence show together. A chord within a second of another chord joins it, as in `C-x C-f`, and so does a plain key after a Ctrl chord, as in `C-c c`. Cloncher guesses these from timing rather than from Emacs's key bindings, so a plain key after Meta starts fresh and `M-x` followed by typing stays apart.
+
+Wayland doesn't let one program see another program's keys, so Cloncher reads the keyboards' devices in `/dev/input` directly. You need to be in the `input` group. It shows the keys of a US layout and picks up keyboards you plug in. Remember it shows everything you type, passwords included.
+
 ### Jot a note into your scratchpad
 
 Search for **Quick note**, open **Notes**, or bind a key to `cloncher note`. A translucent editor opens in the middle of the screen in the launcher's palette. Press **Ctrl+Enter** to append the note to your scratchpad under a heading with an inactive Org timestamp, such as `* [2026-11-22 Sun 14:05]`. Press **Esc** or the close button to discard it. If the file can't be written, the editor stays open with your text.

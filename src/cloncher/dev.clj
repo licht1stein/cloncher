@@ -7,6 +7,7 @@
             [cloncher.note :as note]
             [cloncher.palette :as palette]
             [cloncher.panel :as panel]
+            [cloncher.key-overlay :as key-overlay]
             [cloncher.timer-overlay :as timer-overlay]
             [cloncher.view :as view]
             [jolt.nrepl :as nrepl]))
@@ -181,6 +182,25 @@
   (cui/apply-colors! ui (palette/load-colors))
   (wallpaper! ui "timers-wallpaper" :fit #(timer-overlay/preview! ui)))
 
+(defn- keys-section!
+  "The key display's card, drawn by its own renderer from a sample of typing and chords."
+  [ui]
+  (section-heading! ui "keys-heading" "Key display" nil false)
+  (cui/apply-colors! ui (palette/load-colors))
+  (wallpaper! ui "keys-wallpaper" :fit
+    #(do (cui/bar! ui "keys-centered")
+         (try
+           (cui/spacer! ui)
+           (panel/begin! ui "keys-card" {:width key-overlay/width :height key-overlay/height})
+           (try (key-overlay/render! ui {:entries [{:text "hello"} {:sequence [[#{:ctrl} 30]] :count 1}
+                                                   {:sequence [[#{} 105]] :count 3}
+                                                   {:sequence [[#{:ctrl} 46] [#{} 46]] :count 1 :emacs? true}]
+                                         :at (System/currentTimeMillis)}
+                                     (System/currentTimeMillis))
+                (finally (cui/end! ui)))
+           (cui/spacer! ui)
+           (finally (cui/end! ui))))))
+
 (defn- render-preview!
   "Center the previews: side by side when the window is wide enough, else stacked
   in one column of the launcher's width. The page scrolls when it runs out of height."
@@ -201,11 +221,12 @@
           (do (column! "launcher-column" launcher-width)
               (try (launcher-section! ui buffer) (finally (cui/end! ui)))
               (column! "widgets-column" widgets-width)
-              (try (note-section! ui) (timers-section! ui) (finally (cui/end! ui))))
+              (try (note-section! ui) (timers-section! ui) (keys-section! ui) (finally (cui/end! ui))))
           (do (column! "preview-column" (max 1 (min widgets-width (- (cui/width ui) 16))))
               (try (launcher-section! ui buffer)
                    (note-section! ui)
                    (timers-section! ui)
+                   (keys-section! ui)
                    (finally (cui/end! ui)))))
         (spacer! ui "right-gutter")
         (finally (cui/end! ui)))
