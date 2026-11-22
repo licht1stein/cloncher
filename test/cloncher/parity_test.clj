@@ -82,6 +82,25 @@
     (is (= ["Code/.config/bindings.edn"] (files/rank index ".conf bindings" true)))
     (is (= ["Downloads/binding.clj" "Code/lib/bindings.clj"] (files/rank index "binding.clj" true)))))
 
+(deftest app-catalog-picks-up-installs-before-expiry
+  (let [directory (fs/create-temp-dir {:prefix "cloncher-apps-"})
+        apps (fs/create-dirs (fs/path directory "applications"))
+        write-app! (fn [file label]
+                     (spit (str file) (str "[Desktop Entry]\nType=Application\nName=" label "\nExec=true\n")))
+        installed (fs/path apps "new.desktop")]
+    (try
+      (binding [process/*environment* {"HOME" (str directory)
+                                       "XDG_CURRENT_DESKTOP" "test"
+                                       "XDG_DATA_HOME" (str directory)
+                                       "XDG_DATA_DIRS" (str directory)}]
+        (write-app! (fs/path apps "existing.desktop") "Existing App")
+        (is (= ["Existing App"] (mapv :label (sources/apps))))
+        (write-app! installed "New App")
+        (is (= ["Existing App" "New App"] (mapv :label (sources/apps))))
+        (fs/delete installed)
+        (is (= ["Existing App"] (mapv :label (sources/apps)))))
+      (finally (fs/delete-tree directory)))))
+
 (deftest shell-histories-and-expressions
   (is (= ["echo first\necho second" "pwd"]
          (sources/parse-histfile ": 100:0;echo first\\\necho second\n: 110:0;pwd")))

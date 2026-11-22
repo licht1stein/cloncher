@@ -35,7 +35,7 @@ The daemon warms the window and fonts and caches commonly used rows. File search
 
 ## Demos
 
-These are recordings of the compiled launcher with sample device states and files. Click any loop for its MP4.
+These are recordings of the compiled launcher with sample device states, files, and shell history. Click any loop for its MP4.
 
 ### See what’s running from the main menu
 
@@ -101,6 +101,12 @@ Type `/` to start with recent files. Narrow the list by typing, preview the sele
 
 [![File search demo finding a cover image, previewing it, and opening the file action menu](docs/media/files.gif)](docs/media/files.mp4)
 
+### Run a command or pick one from history
+
+Type `>` followed by a command, then choose whether to run it in Kitty or in the background. Type `>>` to search your shell history and rerun a command in Kitty. When the saved working directory still exists, Cloncher opens the terminal there. Press Tab on a history entry to edit the command before running it.
+
+[![Terminal demo typing a command with >, then filtering shell history with >> and running a project command in Kitty](docs/media/terminal.gif)](docs/media/terminal.mp4)
+
 ## A few good keys to know
 
 | Key | What it does |
@@ -108,12 +114,15 @@ Type `/` to start with recent files. Narrow the list by typing, preview the sele
 | Type at the root | Search apps and actions across searchable submenus. Menu actions come first, with a divider above the apps. [Watch the menu demo](docs/media/navigation.mp4). |
 | `;` then a row label | Jump to the labeled result. You can also hold Alt and type the label. |
 | `/` · `@` · `=` | Open Files, Projects, or calculator history from the root. |
-| `>` · `>>` · `>>>` | Enter a command or browse history for terminal or background execution. |
+| `>` | Enter a command and choose Kitty or background execution. |
+| `>>` · `>>>` | Search shell history and rerun a command in Kitty or the background, respectively. |
 | `(` | Start a restricted desktop Lisp expression for actions such as finding and focusing a window. |
 | Ctrl+Enter | Run the selected row's alternate action, where one is defined. |
 | Backspace on an empty query · Esc | Go back from a nested view. Esc closes the root. |
 
-Apps come from XDG desktop entries. Projects use Emacs's project list and can expose Babashka tasks, Just recipes, and Make targets. File search starts from a small recent-files cache while the daemon prepares the full index in the background.
+Apps come from XDG desktop entries. Opening the main menu or Apps uses cached results while Cloncher checks for new, removed, or edited entries in the background. It rebuilds the catalog if entries changed or if the cache is at least 60 seconds old.
+
+Projects use Emacs's project list and can expose Babashka tasks, Just recipes, and Make targets. File search starts from a small recent-files cache while the daemon prepares the full index in the background.
 
 ## Build and run
 

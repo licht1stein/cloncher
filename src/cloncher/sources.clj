@@ -44,9 +44,8 @@
        :app-icon (resolve-icon (entry "Icon"))
        :action #(run! "gio" "launch" (str path))})))
 
-(defn- load-apps []
-  (let [resolve-icon (icons/resolver)]
-    (->> (icons/data-dirs)
+(defn- app-entry-paths []
+  (->> (icons/data-dirs)
          (mapcat (fn [dir]
                    (let [base (fs/path dir "applications")]
                      (when (fs/directory? base)
@@ -54,7 +53,17 @@
                             (fs/glob base "**.desktop"))))))
          (reduce (fn [by-id [id path]]
                    (if (contains? by-id id) by-id (assoc by-id id path))) {})
-         vals
+         vals))
+
+(defn- app-entry-stamps [paths]
+  (into {} (map (fn [path]
+                  [path (try (fs/last-modified-time path)
+                             (catch java.io.IOException _ nil))]))
+        paths))
+
+(defn- load-apps [paths]
+  (let [resolve-icon (icons/resolver)]
+    (->> paths
          (keep (fn [path] (try (visible-app path resolve-icon) (catch Exception _ nil))))
          (sort-by (comp str/lower-case :label))
          vec)))
@@ -68,15 +77,20 @@
 (defn cached-apps []
   (get-in @app-catalogs [(app-catalog-key) :rows]))
 
-(defn apps []
+(defn apps
+  "Recheck desktop entry paths and mtimes off the window thread before reusing rows."
+  []
   (let [key (app-catalog-key)]
     (locking app-catalogs
-      (let [{:keys [stamp rows]} (get @app-catalogs key)
+      (let [{:keys [stamp entries rows]} (get @app-catalogs key)
+            paths (app-entry-paths)
+            current-entries (app-entry-stamps paths)
             now (System/currentTimeMillis)]
-        (if (and rows (< (- now stamp) 60000))
+        (if (and rows (= entries current-entries) (< (- now stamp) 60000))
           rows
-          (let [rows (search/prepare-rows (load-apps))]
-            (swap! app-catalogs #(into {key {:stamp now :rows rows}} (take 3 (dissoc % key))))
+          (let [rows (search/prepare-rows (load-apps paths))]
+            (swap! app-catalogs #(into {key {:stamp now :entries current-entries :rows rows}}
+                                       (take 3 (dissoc % key))))
             rows))))))
 
 (defn- elisp [form]
