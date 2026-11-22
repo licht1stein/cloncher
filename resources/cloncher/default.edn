@@ -1,6 +1,8 @@
 ;; Cloncher menu configuration. Items appear in the order listed.
 {;; Quick note appends timestamped entries to this Org file.
  ;; :scratchpad "~/org/scratchpad.org"
+ ;; The daemon records every clipboard change into an encrypted history when this is true.
+ :clipboard-history false
  :menus
  {:main {:prompt "Menu"
           :items [{:label "Apps" :icon "󰀻" :action {:menu :apps} :root-only? true}
@@ -59,7 +61,11 @@
    :insert {:prompt "Insert"
             :items [{:icon "󰞅" :label "Emoji" :action {:exec ["~/dotfiles/bin/menu/emoji.clj"]}}
                     {:icon "󰅍" :label "Snippet" :action {:exec ["~/dotfiles/bin/snippy.clj"]}}
-                    {:icon "󰨸" :label "Clipboard history" :action {:exec ["noctalia" "msg" "panel-toggle" "clipboard"]}}]}
+                    {:icon "󰨸" :label "Clipboard history" :action {:menu :clipboard}}]}
+
+   ;; The daemon records the history while :clipboard-history is on.
+   :clipboard {:prompt "Clipboard" :searchable? false
+               :items [{:provider :clipboard/history}]}
 
    :connect {:prompt "Connect"
              :items [{:provider :connect/status}]}

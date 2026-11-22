@@ -22,7 +22,7 @@
 (defn process [& args] (invoke process/process args))
 (def destroy-tree process/destroy-tree)
 
-(defn- self-command
+(defn self-command
   "The argv that runs this Cloncher build again: the release binary, or Jolt with the source tree."
   []
   (let [exe (.getCanonicalFile (io/file "/proc/self/exe"))]

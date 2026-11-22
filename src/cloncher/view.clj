@@ -112,6 +112,8 @@
                (zero? count) "No matches"
                :else (str (when-let [action (:hint row)] (str "↵ " action "  "))
                           (when-let [action (:alt-hint row)] (str "^↵ " action "  "))
+                          (apply str (for [[letter {:keys [hint]}] (sort (:keys row))]
+                                       (str "^" (str/upper-case letter) " " hint "  ")))
                           (when nested? "⌫ back  ")
                           ";label select"))]
     (cui/separator! ui)
@@ -190,7 +192,9 @@
           (finally (cui/end! ui))))
     (row* ui id row selected? actionable? width)))
 
-(defn file-preview! [ui width path {:keys [notice detail image lines working?]}]
+(defn file-preview!
+  "The preview pane: an image, numbered lines of a file, or `text` wrapped as prose."
+  [ui width path {:keys [notice detail image lines text working?]}]
   (cui/column! ui "file-preview" {:width width :pad 12 :gap 4 :surface? true})
   (try
     (cui/caption! ui (or detail "Preview"))
@@ -200,6 +204,7 @@
         working? (cui/caption! ui "Loading preview…")
         notice (cui/caption! ui notice)
         image (cui/thumbnail! ui "sample" image (- width 34))
+        text (cui/text! ui text)
         (seq lines) (let [text (str/join "\n" (map-indexed #(format "%2d  %s" (inc %1) %2) lines))]
                       (cui/markdown! ui "contents"
                                      (str "````````text\n"

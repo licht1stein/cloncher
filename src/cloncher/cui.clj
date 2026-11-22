@@ -48,6 +48,7 @@
   [:pointer :string :int :int :int :int :int :int] :void)
 (ffi/defcfn end! "cui_host_box_end" [:pointer] :void)
 (ffi/defcfn caption! "cui_host_caption" [:pointer :string] :void)
+(ffi/defcfn text! "cui_host_text" [:pointer :string] :void)
 (ffi/defcfn heading! "cui_host_heading" [:pointer :string :int] :void)
 (ffi/defcfn separator! "cui_host_separator" [:pointer] :void)
 (ffi/defcfn spacer! "cui_spacer" [:pointer] :void)
@@ -141,10 +142,11 @@
         control? (bit-test mods 1)
         alt? (bit-test mods 2)
         pressed? #(key-pressed? ui %)
-        letter (when (or jump? alt?)
-                 (some (fn [[i ch]] (when (pressed? (+ 15 i)) (str ch)))
-                       (map-indexed vector "abcdefghijklmnopqrstuvwxyz0123456789")))]
+        letter-pressed #(some (fn [[i ch]] (when (pressed? (+ 15 i)) (str ch)))
+                              (map-indexed vector "abcdefghijklmnopqrstuvwxyz0123456789"))
+        letter (when (or jump? alt?) (letter-pressed))]
     {:control? control? :alt? alt? :letter letter
+     :control-letter (when control? (letter-pressed))
      :shift? (bit-test mods 0)
      :copy? (and control? (pressed? 17))
      :jump-cancel? (and control? (pressed? 21))

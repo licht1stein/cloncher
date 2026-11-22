@@ -3,6 +3,7 @@
             [cloncher.process :as p]
             [clojure.string :as str]
             [clojure.java.io :as io]
+            [cloncher.clipboard :as clipboard]
             [cloncher.commands :as commands]
             [cloncher.cui :as cui]
             [cloncher.daemon :as daemon]
@@ -26,7 +27,7 @@
             [cloncher.view-cache :as view-cache]))
 
 (def usage
-  "Usage: cloncher [root | apps | menu [NAME] | files | projects | projects add [DIRECTORY] | project-add [DIRECTORY] | rename-workspace | note | dmenu [-p PROMPT] | secret [-p PROMPT] | daemon | ping | close | screenshot PATH | --screenshot PATH]")
+  "Usage: cloncher [root | apps | menu [NAME] | files | projects | projects add [DIRECTORY] | project-add [DIRECTORY] | rename-workspace | note | clipboard-capture | dmenu [-p PROMPT] | secret [-p PROMPT] | daemon | ping | close | screenshot PATH | --screenshot PATH]")
 
 (defn parse-args [args]
   (let [args (if (= ["projects" "add"] (vec (take 2 args)))
@@ -49,7 +50,7 @@
       "screenshot" (if argument {:mode :control} (throw (ex-info usage {})))
       "--screenshot" (if argument {:mode :launcher :kind :root :screenshot argument}
                          (throw (ex-info usage {})))
-      ("ping" "close" "daemon" "rename-workspace" "note")
+      ("ping" "close" "daemon" "rename-workspace" "note" "clipboard-capture")
       (if argument (throw (ex-info usage {})) {:mode (keyword command)})
       "--help" {:mode :help}
       (throw (ex-info usage {})))))
@@ -328,23 +329,29 @@
 (defn close-session! [session]
   (show! session {:kind :off}))
 
-(defn- preview-state! [session ui path]
+(defn- preview-key
+  "A preview target is a file path, or a row's `{:id :load}` for content that is not a file."
+  [target]
+  (if (map? target) (:id target) target))
+
+(defn- preview-state! [session ui target]
   (let [holder (:preview session)
-        {:keys [target job image] :as current} @holder]
+        {:keys [job image] :as current} @holder
+        key (preview-key target)]
     (cond
-      (not= target path)
+      (not= (:target current) key)
       (do
         (when job (cancel-job! job))
         (when image (cui/destroy-texture! ui (:texture image)))
         (vreset! holder
-                 (when path
-                   {:target path :working? true
-                    :job (frame-job #(preview/load-preview path))}))
-        (when path (poll-jobs! ui)))
+                 (when target
+                   {:target key :working? true
+                    :job (frame-job (if (map? target) (:load target) #(preview/load-preview target)))}))
+        (when target (poll-jobs! ui)))
 
       (and job (job-ready? job))
       (let [{:keys [bytes] :as answer} (try (job-value job) (catch Exception _ {:notice "Preview unavailable"}))]
-        (vreset! holder (assoc (dissoc answer :bytes) :target path
+        (vreset! holder (assoc (dissoc answer :bytes) :target key
                                :image (when bytes (cui/load-thumbnail! ui bytes)))))
 
       (:working? current) (poll-jobs! ui))
@@ -415,7 +422,7 @@
                           (cui/column! ui "results" {:pad 0 :gap 0})
                           (try (rows-pane! session ui view rows index page layout (- width preview-width 12))
                                (finally (cui/end! ui))))]
-            (ui-view/file-preview! ui preview-width path preview)
+            (ui-view/file-preview! ui preview-width (preview-key path) preview)
             clicked)
           (finally (cui/end! ui))))
       (rows-pane! session ui view rows index page layout width))))
@@ -580,7 +587,8 @@
                     (min ui-view/preview-width (max 1 (- (cui/width ui) 64)))
                     (cui/width ui))
             path (when (>= width 500)
-                   (or (:file (get rows index)) (when (= :file kind) (:path view))))
+                   (let [row (get rows index)]
+                     (or (:file row) (:preview row) (when (= :file kind) (:path view)))))
             clicked (when-not secret?
                       (let [clicked (draw-results! session ui view rows index page layout width path)]
                         (when fit? (cui/spacer! ui))
@@ -588,6 +596,8 @@
                         clicked))
             resolved (:resolved view)
             view (dissoc view :resolved)
+            ;; A row's Ctrl+letter binding acts on it and keeps the view open, refreshed.
+            bound (get-in (get rows index) [:keys (:control-letter shortcuts)])
             choice (cond
                      resolved (choose view (:row resolved) (:shortcuts resolved))
                      (and secret? submitted?)
@@ -600,6 +610,8 @@
                      (and (= :root kind) (:history? shortcuts))
                      (let [{:keys [history? command]} (command-options (:query view))]
                        {:fill (if history? (str ">" command) (str ">>" (or command (:query view))))})
+                     bound {:refresh (:action bound) :destination :current
+                            :progress {:view-id (:id view) :row-key (row-key (get rows index))}}
                      (:copy? shortcuts) (copy-choice view (get rows index))
                      (:tab keys) (complete-choice view (get rows index) rows)
                      clicked (some-> (choose view clicked shortcuts) (assoc :used clicked))
@@ -762,6 +774,17 @@
   (binding [menu/*configuration* (menu/load-configuration!)]
     (open-configured-window! request)))
 
+;; The daemon records the clipboard while `:clipboard-history` is on: `wl-paste --watch`
+;; runs `cloncher clipboard-capture` for every change.
+(defonce ^:private clipboard-watcher (atom nil))
+
+(defn- sync-clipboard-watch! [enabled?]
+  (let [running @clipboard-watcher
+        alive? (and running (.isAlive ^Process (:proc running)))]
+    (cond
+      (and enabled? (not alive?)) (reset! clipboard-watcher (clipboard/watch! (p/self-command)))
+      (and (not enabled?) running) (do (p/destroy-tree running) (reset! clipboard-watcher nil)))))
+
 (defn- picker! [request]
   (:value (open-window! request)))
 
@@ -827,6 +850,7 @@
                           0)
       ;; The editor runs in this process; the hotkey client already started a fresh one.
       :note (do (menu/scratchpad-note! #(note/worker! % load-cui!)) 0)
+      :clipboard-capture (do (clipboard/capture!) 0)
       :ping (or (:exit (daemon-reply args [])) 1)
       :close (or (:exit (daemon-reply args [])) 0)
       :control (or (:exit (daemon-reply args [])) 3)
@@ -838,6 +862,8 @@
                     (or (daemon/serve! parse-args open-window!
                                        (fn [{:keys [effect]}] (run-effect! effect daemon-picker!))
                                        (fn []
+                                         ;; Runs between sessions, so a config edit takes effect on the next open.
+                                         (sync-clipboard-watch! (:clipboard-history (menu/load-configuration!)))
                                          (when-not (= "1" (p/getenv "CLONCHER_TILING"))
                                            (cui/prepare-launcher! width height))
                                          (when-not @primed?

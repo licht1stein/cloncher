@@ -5,6 +5,7 @@
             [clojure.string :as str]
             [clojure.java.io :as io]
             [clojure.edn :as edn]
+            [cloncher.clipboard :as clipboard]
             [cloncher.config :as config]
             [cloncher.json :as json]
             [cloncher.search :as search]
@@ -912,6 +913,85 @@
       (->> rows (sort-by (juxt (comp not :code?) (comp - :date))) (mapv #(dissoc % :code? :date)))
       [{:icon "󰇮" :label "No codes or links in triaged mail"}])))
 
+(defn- byte-size [n]
+  (cond (< n 1024) (str n " B")
+        (< n (* 1024 1024)) (str (quot n 1024) " KB")
+        :else (format "%.1f MB" (/ n 1048576.0))))
+
+(defn- clipboard-preview
+  "The preview pane's content for a history entry: the image, or its text wrapped
+  as written (up to 8,000 characters)."
+  [entry image? detail]
+  (try
+    (let [bytes (clipboard/payload entry)]
+      (if image?
+        {:detail detail :bytes bytes}
+        (let [text (str/trim (String. bytes "UTF-8"))]
+          {:detail detail :text (if (> (count text) 8000) (str (subs text 0 8000) "…") text)})))
+    (catch Exception error
+      {:detail detail :notice (ex-message error)})))
+
+(defn- export-clipboard-entry!
+  "Write a history entry to ~/Downloads and say where."
+  [{:keys [id mime] :as entry} image?]
+  (let [file (fs/path (or (p/getenv "HOME") (str (fs/home))) "Downloads"
+                      (str "clipboard-" id "." (if image? (subs mime 6) "txt")))]
+    (fs/create-dirs (fs/parent file))
+    (with-open [out (io/output-stream (str file))]
+      (.write out (clipboard/payload entry)))
+    (p/shell {:continue true} "notify-send" "--" "Exported clipboard entry" (str file))))
+
+(defn get-clipboard-items
+  "The clipboard history, saved entries first, then newest first, with a preview pane
+  like the file browser's. Enter makes the entry the clipboard again, with its own MIME
+  type, and pastes it into the focused window. Ctrl+S saves or unsaves, Ctrl+D deletes,
+  and Ctrl+Enter shows every option."
+  []
+  (if-not (:clipboard-history (configuration))
+    [{:icon "\uF0EA" :label "Clipboard history is off"
+      :subtitle (str "set :clipboard-history true in " (config/path))}]
+    (try
+      (let [rows (for [{:keys [id mime preview bytes at saved] :as entry} (clipboard/history)
+                       :let [image? (str/starts-with? mime "image/")
+                             lines (when-not image? (remove str/blank? (str/split-lines (or preview ""))))
+                             age (short-age (quot at 1000))
+                             kind (if image? (str (str/upper-case (subs mime 6)) " image") "Text")
+                             paste #(clipboard/paste! entry)
+                             save {:hint (if saved "unsave" "save") :action #(clipboard/toggle-saved! entry)}
+                             delete {:hint "delete" :action #(clipboard/delete! entry)}]]
+                   {:icon (cond saved "\uF02E" image? "\uF03E" :else "\uF0F6")
+                    :label (if image?
+                             "Image"
+                             (fit (str/replace (str/trim (or (first lines) "")) #"\s+" " ") 120))
+                    :subtitle (str/join " · " (cond-> [] saved (conj "saved") true (conj age)))
+                    :search (when-not image? preview)
+                    :row-id (str "clipboard " id)
+                    :preview {:id (str "clipboard " id)
+                              :load #(clipboard-preview entry image?
+                                                        (str/join "  ·  " [kind (byte-size bytes) (str age " ago")]))}
+                    :hint "paste"
+                    :volatile true
+                    :action paste
+                    :keys {"s" save "d" delete}
+                    :alt-hint "options"
+                    :alt-action {:prompt (if image? "Image" (fit (or (first lines) "Text") 40))
+                                 :items [{:icon "\uF0EA" :label "Paste" :action paste}
+                                         {:icon "\uF0C5" :label "Copy" :subtitle "without pasting"
+                                          :action #(clipboard/copy! entry)}
+                                         {:icon "\uF02E" :label (if saved "Unsave" "Save")
+                                          :subtitle (if saved "Ctrl+S · let it age out" "Ctrl+S · keep at the top")
+                                          :action (:action save) :refresh :parent}
+                                         {:icon "\uF1F8" :label "Delete" :subtitle "Ctrl+D"
+                                          :action (:action delete) :refresh :parent}
+                                         {:icon "\uF019" :label "Export to Downloads"
+                                          :action #(export-clipboard-entry! entry image?)}
+                                         {:icon "\uF12D" :label "Clear clipboard history"
+                                          :subtitle "removes every unsaved entry"
+                                          :action clipboard/clear! :refresh :parent}]}})]
+        (if (seq rows) (vec rows) [{:icon "\uF0EA" :label "Clipboard history is empty"}]))
+      (catch Exception error
+        [{:icon "\uF071" :label "Could not read the clipboard history" :subtitle (ex-message error)}]))))
+
 (defn get-mail-auth-items
   "One row per mail account, the ones that need authorizing first.
 
@@ -1092,7 +1172,8 @@
    :focus/status get-focus-items :timers/active active-timer-items
    :sound/devices get-sound-items :power/profiles get-power-profile-items
    :claude/accounts get-claude-items :keys/bindings get-keybindings-menu
-   :tailscale/networks get-tailscale-menu-items :record/status get-record-menu-items})
+   :tailscale/networks get-tailscale-menu-items :record/status get-record-menu-items
+   :clipboard/history get-clipboard-items})
 
 (def ^:private built-in-actions
   {:workspace/rename rename-workspace :packages/aur install-aur-action
@@ -1165,7 +1246,8 @@
               [:action :alt-action]))))
 
 (defn- compile-configuration [text]
-  (let [{:keys [menus tailnets scratchpad] :or {tailnets []}} (config/read-config text)]
+  (let [{:keys [menus tailnets scratchpad clipboard-history] :or {tailnets [] clipboard-history false}}
+        (config/read-config text)]
     (when-not (and (map? menus) (contains? menus :main))
       (throw (ex-info "Expected a :menus map containing :main" {})))
     (when-not (and (vector? tailnets)
@@ -1177,13 +1259,15 @@
       (throw (ex-info "Expected :tailnets to contain :label, :tailnet and :account strings" {})))
     (when-not (or (nil? scratchpad) (and (string? scratchpad) (not (str/blank? scratchpad))))
       (throw (ex-info "Expected :scratchpad to be the path of an Org file" {})))
+    (when-not (boolean? clipboard-history)
+      (throw (ex-info "Expected :clipboard-history to be true or false" {})))
     (let [menus (into {} (map (fn [[key menu]]
                                 (when-not (and (keyword? key) (nil? (namespace key))
                                                (map? menu) (string? (:prompt menu)) (vector? (:items menu)))
                                   (throw (ex-info (str "Invalid menu " key) {:menu key})))
                                 [key (update menu :items #(mapv (partial compile-item menus key) %))])) menus)
           root-items (search/index-rows (remove :provider (get-in menus [:main :items])))]
-      {:menus menus :tailnets tailnets :scratchpad scratchpad
+      {:menus menus :tailnets tailnets :scratchpad scratchpad :clipboard-history clipboard-history
        :root-items root-items :revision (str (hash text))})))
 
 (def ^:private defaults (delay (compile-configuration config/default-text)))

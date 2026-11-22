@@ -61,6 +61,28 @@ Search for **Quick note**, open **Notes**, or bind a key to `cloncher note`. A t
 
 Set the file with a top-level `:scratchpad` path in your config, for example `:scratchpad "~/org/scratchpad.org"`. Like the timer, the editor is a Wayland layer-shell overlay. It takes the keyboard until you save or dismiss it.
 
+### Paste from your clipboard history
+
+**When `:clipboard-history` is `true`, the Cloncher daemon monitors your clipboard.** It runs `wl-paste --watch` and stores every change it sees, text and images, in an encrypted history in `$XDG_STATE_HOME/cloncher/clipboard`. It skips selections that a password manager marks as secret (`x-kde-passwordManagerHint`). The setting is a top-level key in your config, off in the bundled default:
+
+```clojure
+{:clipboard-history true
+ :menus {…}}
+```
+
+Set it to `false` to stop recording. The daemon starts or stops monitoring when you next open the launcher. Entries already recorded stay until you clear them.
+
+Press Mod+V, or open **Insert › Clipboard history**. The history is a searchable list, saved entries first, then newest first. The selected entry shows on the right as wrapped text or as the image.
+
+| Key | What it does |
+| --- | --- |
+| Enter | Make the entry the clipboard again and paste it into the window you came from |
+| Ctrl+S | Save or unsave. Saved entries stay at the top and never age out |
+| Ctrl+D | Delete the entry |
+| Ctrl+Enter | All options: paste, copy without pasting, save, delete, export to Downloads, clear the unsaved history |
+
+Pasting uses `wtype`: Ctrl+Shift+V in terminals, Shift+Insert in Emacs, and Ctrl+V elsewhere. The history keeps 200 unsaved entries, text up to 1 MiB and images up to 16 MiB. The encryption key lives in the Secret Service and is created on first use, so the keyring has to be unlocked. Cloncher needs `wl-clipboard`, `secret-tool`, and libsodium. The first time it opens the history, it imports what Noctalia's clipboard history had recorded, and Noctalia's pinned entries arrive saved.
+
 ### Wi-Fi stays in the menu
 
 See signal strength, security, and the connected network at a glance. Start a scan and the spinner appears on the scan row itself. The result list refreshes in place when the scan finishes.
