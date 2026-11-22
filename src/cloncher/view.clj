@@ -12,7 +12,7 @@
 (def ^:private prompt-height 40)
 (def ^:private status-height 21)
 (def ^:private separator-height 1)
-(def ^:private apps-divider-height 13)   ; a hairline with 6 points of air above and below
+(def ^:private divider-height 13)   ; a hairline with 6 points of air above and below
 (def ^:private chrome-height (+ prompt-height status-height separator-height))
 (def ^:private file-preview-minimum 300)
 
@@ -48,16 +48,17 @@
     :else 24))
 
 (defn section-start? [previous row]
-  (and previous (or (and (:live previous) (not (:live row)))
-                    (> (or (:section row) 0) (or (:section previous) 0)))))
+  (and previous (> (or (:section row) 0) (or (:section previous) 0))))
 
-(defn apps-start?
-  "Whether `row` is the first app after menu results, which a visible divider sets apart."
+(defn divided?
+  "Whether a visible divider sets `row` apart from `previous`: the first menu row after
+  what is running right now, or the first app after menu results."
   [previous row]
-  (boolean (and previous (:app? row) (not (:app? previous)))))
+  (boolean (and previous (or (and (:live previous) (not (:live row)))
+                             (and (:app? row) (not (:app? previous)))))))
 
 (defn- boundary-height [previous row]
-  (cond (apps-start? previous row) apps-divider-height
+  (cond (divided? previous row) divider-height
         (section-start? previous row) separator-height
         :else 0))
 
@@ -173,15 +174,15 @@
   (cui/end! ui))
 
 (defn divider!
-  "The divider above the first app, inset and with air on both sides."
+  "The divider before the menu and before the apps, inset and with air on both sides."
   [ui id]
-  (panel/begin! ui id {:height apps-divider-height :pad-x 14 :pad-y 6})
+  (panel/begin! ui id {:height divider-height :pad-x 14 :pad-y 6})
   (try (hairline! ui "line")
        (finally (cui/end! ui))))
 
 (defn row!
-  "Draw a result row; return whether it was clicked. A `:divider?` row starts the apps
-  in a paged list: rows there share the tallest row's height, which leaves room for a
+  "Draw a result row; return whether it was clicked. A `:divider?` row starts a divided
+  part of a paged list: rows there share the tallest row's height, which leaves room for a
   hairline but not for the divider's spacing."
   [ui id {:keys [divider?] :as row} selected? actionable? width]
   (if divider?

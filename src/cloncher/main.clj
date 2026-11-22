@@ -99,11 +99,19 @@
     :dmenu (mapv search/line-row (:lines view))
     []))
 
+;; The labels the live rows last had, so an opening root view gives them the same ones
+;; its fresh build will.
+(defonce ^:private live-labels (atom {}))
+
+(defn- live-key [row] (or (:row-id row) (menu/format-item row)))
+
 (defn- build-view [view]
   (try
-    (let [rows (load-view view)]
+    (let [rows (search/index-rows (load-view view))]
       (try (view-cache/save-rows! view rows) (catch Exception _ nil))
-      {:rows (search/index-rows rows)})
+      (when (= :root (:kind view))
+        (reset! live-labels (into {} (keep #(when (:live %) [(live-key %) (:shortcut %)])) rows)))
+      {:rows rows})
     (catch Exception error {:error (ex-message error)})))
 
 (def ^:dynamic ^:private *frame-signal* nil)
@@ -140,14 +148,20 @@
            :usage usage
            :apps (when (= :root kind) apps)
            :apps-build (when (= :root kind) (frame-job #(hash-map :apps (sources/apps))))
-           :rows (or (view-cache/cached-rows view)
-                     (case kind
-                       :root (:root-items (menu/configuration))
-                       :apps (search/index-rows (search/rank "" apps usage))
-                       :menu (search/index-rows (menu/static-items key))
-                       :dmenu (search/index-rows (load-view view))
-                       :tasks (search/index-rows (:rows view))
-                       []))
+           ;; The root opens with the last live rows above the cached menu, so nothing
+           ;; moves when the fresh read lands.
+           :rows (cond->> (or (view-cache/cached-rows view)
+                              (case kind
+                                :root (:root-items (menu/configuration))
+                                :apps (search/index-rows (search/rank "" apps usage))
+                                :menu (search/index-rows (menu/static-items key))
+                                :dmenu (search/index-rows (load-view view))
+                                :tasks (search/index-rows (:rows view))
+                                []))
+                    (and (= :root kind) (seq (menu/recent-live-items)))
+                    (#(search/index-rows (into (mapv (fn [row] (assoc row :shortcut (@live-labels (live-key row))))
+                                                     (menu/recent-live-items))
+                                               %))))
            :next-live (+ (System/currentTimeMillis) 2000)
            :build (when-not (contains? #{:dmenu :secret :tasks :files :project-add} kind)
                     (frame-job #(build-view view))))))
@@ -382,19 +396,19 @@
       (let [previous (get rows (dec i))
             row (nth rows i)
             section-start? (ui-view/section-start? previous row)
-            apps-start? (ui-view/apps-start? previous row)
+            divided? (ui-view/divided? previous row)
             shortcut (:shortcut row)
             row (cond-> row
                   row-height (assoc :row-height row-height)
                   ;; A paged list has a fixed row height, so the row draws its own divider.
-                  (and row-height apps-start?) (assoc :divider? true)
+                  (and row-height divided?) (assoc :divider? true)
                   (and (= (:view-id progress) (:id view)) (= (:row-key progress) (row-key row)))
                   (assoc :running-progress progress)
                   (and shortcut (str/starts-with? shortcut prefix))
                   (assoc :display-shortcut (subs shortcut (count prefix)))
                   (:app-icon row) (assoc :texture (row-texture! (:icons session) ui (:app-icon row))))]
         (cond row-height nil
-              apps-start? (ui-view/divider! ui (str (:id view) "-apps"))
+              divided? (ui-view/divider! ui (str (:id view) "-divider-" i))
               section-start? (cui/separator! ui))
         (when (ui-view/row! ui (str (:id view) "-" i) row (= i index) (boolean (actionable? row)) width)
           (vreset! clicked row))))
@@ -521,7 +535,9 @@
               view (dissoc view :live-job)]
           (cui/wake-in! ui (max 0.001 (/ (- (:next-live view) now) 1000.0)))
           (if rows
-            (assoc (dissoc view :ranked) :rows (search/index-rows (into rows (remove :live (:rows view)))))
+            (assoc (dissoc view :ranked)
+                   :rows (search/index-rows (into (mapv #(assoc % :shortcut (@live-labels (live-key %))) rows)
+                                                  (remove :live (:rows view)))))
             view))
         (and (nil? job) (not (:build view)) (>= now (:next-live view 0)))
         (do (poll-jobs! ui)
@@ -868,12 +884,21 @@
                                        (fn []
                                          ;; Runs between sessions, so a config edit takes effect on the next open.
                                          (sync-clipboard-watch! (:clipboard-history (menu/load-configuration!)))
+                                         ;; A session may have changed what is running; read it before the next open.
+                                         (future (try (menu/live-items) (catch Exception _ nil)))
                                          (when-not (= "1" (p/getenv "CLONCHER_TILING"))
                                            (cui/prepare-launcher! width height))
                                          (when-not @primed?
                                            (vreset! primed? true)
+                                           ;; Keep the live rows at most five seconds old for an instant root view.
+                                           (future (loop []
+                                                     (Thread/sleep 5000)
+                                                     (try (menu/live-items) (catch Exception _ nil))
+                                                     (recur)))
                                            (binding [menu/*configuration* configuration]
-                                             (future (view-cache/prime!)))
+                                             (future (view-cache/prime!)
+                                                     ;; Labels the live rows, so even the first open keeps them.
+                                                     (build-view {:kind :root})))
                                            (future (sources/apps))
                                            (future (files/prime!)))))
                         0)))

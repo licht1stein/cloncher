@@ -1201,12 +1201,27 @@
   "cast.clj's marker for media it cast; only then is the receiver asked."
   (str (fs/path (or (System/getenv "XDG_RUNTIME_DIR") "/tmp") "noctalia-cast-mirror" "cast.json")))
 
+(defonce ^:private live-snapshot (atom nil))
+
+(defn recent-live-items
+  "The live rows from the last read, for drawing the root view at once. A fresh read
+  replaces them within moments, and the daemon keeps them a few seconds old at most."
+  []
+  @live-snapshot)
+
+(declare read-live-items)
+
 (defn live-items
+  "Read the live rows and remember them for the next launcher open."
+  []
+  (reset! live-snapshot (read-live-items)))
+
+(defn- read-live-items
   "What is running right now, each row the way to stop it: a recording, a
   cast screen, a backup, Do not disturb, Caffeine, the Mullvad VPN, and
-  launcher timers. The root view
-  shows them above Apps, set apart. Read in parallel, and never cached: a
-  stale `Stop recording` would be worse than none."
+  launcher timers. The root view shows them above Apps, set apart. Read in
+  parallel. The root view opens with the previous read and replaces it as soon
+  as this one finishes."
   []
   (let [recording (future (try (-> (p/sh {:continue true} wf-recorder-path "status" "--edn")
                                    :out str/trim edn/read-string)

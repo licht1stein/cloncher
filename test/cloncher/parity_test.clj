@@ -136,7 +136,7 @@
         full (view/result-layout 520 (repeat 80 {:label "Result"}))]
     (is (= 62 (:height (view/result-layout 520 []))))
     (is (= {:page-size 2 :height 110} short))
-    (is (= 131 (:height mixed)))
+    (is (= 143 (:height mixed)))
     (is (= {:page-size 19 :height 518 :virtual-row-height 24} full))
     (is (= 340 (view/window-height short true)))
     (is (= 518 (view/window-height full true)))))
