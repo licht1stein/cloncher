@@ -662,7 +662,8 @@
 
 (defn- wifi-profile!
   "Resolve the selected active profile by UUID, never its ambiguous name.
-  Secrets are read only for an explicit Copy action, never while browsing."
+  Secrets are read only once the network's own details are opened (for its QR code)
+  or copied, never while browsing the network list."
   [{:keys [ssid device]} secrets?]
   (let [active (connection-command 4 "nmcli" "--get-values" "GENERAL.CON-UUID"
                                    "device" "show" device)
@@ -743,14 +744,6 @@
             {:notice "Could not draw the QR code. Is qrencode installed?"}))))
     {:notice "Could not read the network's saved password."}))
 
-(defn- wifi-qr-view
-  "A view whose one row shows the network's QR code beside it."
-  [{:keys [ssid] :as network}]
-  {:prompt (str "Scan to join " ssid)
-   :items [{:icon "󰐲" :label ssid :subtitle "scan with a phone camera"
-            :volatile true
-            :preview {:id (str "wifi qr " ssid) :load #(wifi-qr-preview network)}}]})
-
 (defn- disconnect-wifi! [{:keys [device] :as network}]
   (when (wifi-profile! network false)
     (connection-result! "Wi-Fi disconnect"
@@ -765,17 +758,19 @@
                           (connection-command 12 "nmcli" "--wait" "8"
                                               "connection" "delete" "uuid" uuid)))))
 
-(defn- wifi-network-menu [{:keys [ssid] :as network}]
-  {:prompt ssid
-   :items [{:icon "󰅍" :label "Copy access details" :hint "copy network and password"
-            :volatile true :action #(copy-wifi-access! network)}
-           {:icon "󰐲" :label "Show QR code" :hint "share Wi-Fi access"
-            :volatile true :action (wifi-qr-view network)}
-           {:icon "󰖪" :label "Disconnect" :hint "disconnect from this network"
-            :volatile true :action #(disconnect-wifi! network)}
-           {:icon "󰆴" :label "Forget" :hint "remove saved connection and password"
-            :subtitle "confirmation required · also disconnects"
-            :volatile true :warn true :action #(forget-wifi! network)}]})
+(defn- wifi-network-menu
+  "The connected network's actions, with its QR code beside them from the moment they open."
+  [{:keys [ssid] :as network}]
+  (let [qr {:id (str "wifi qr " ssid) :load #(wifi-qr-preview network)}]
+    {:prompt ssid
+     :items (mapv #(assoc % :preview qr :volatile true)
+                  [{:icon "󰅍" :label "Copy access details" :hint "copy network and password"
+                    :action #(copy-wifi-access! network)}
+                   {:icon "󰖪" :label "Disconnect" :hint "disconnect from this network"
+                    :action #(disconnect-wifi! network)}
+                   {:icon "󰆴" :label "Forget" :hint "remove saved connection and password"
+                    :subtitle "confirmation required · also disconnects"
+                    :warn true :action #(forget-wifi! network)}])}))
 
 (defn get-wifi-items []
   (let [radio (future (connection-command 3 "nmcli" "radio" "wifi"))
