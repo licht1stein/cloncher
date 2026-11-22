@@ -217,6 +217,19 @@ static void clear_role(void)
     layer = (struct launcher_layer){0};
 }
 
+/* The launcher's top edge sits 35% down the screen, raised when that would push a
+ * window of `height` past the bottom. The compositor picks the output; the display
+ * SDL reports for the window, else the primary one, stands in for it. */
+static int launcher_top_margin(int height)
+{
+    SDL_DisplayID display = SDL_GetDisplayForWindow(layer.window);
+    SDL_Rect bounds;
+    if (!SDL_GetDisplayBounds(display ? display : SDL_GetPrimaryDisplay(), &bounds) || bounds.h <= 0)
+        return 140;
+    const int top = bounds.h * 7 / 20, fits = bounds.h - height - 16;
+    return top < fits ? top : (fits > 0 ? fits : 0);
+}
+
 bool cloncher_attach_layer(int width, int height)
 {
     if (!layer.shell || !layer.surface || layer.role)
@@ -245,7 +258,7 @@ bool cloncher_attach_layer(int width, int height)
                            layer.note ? 0 : layer.keys ? ANCHOR_BOTTOM | ANCHOR_RIGHT
                            : layer.timer ? ANCHOR_TOP | ANCHOR_RIGHT : ANCHOR_TOP);
     wl_proxy_marshal_flags(layer.role, SET_MARGIN, NULL, 1, 0,
-                           layer.note || layer.keys ? 0 : layer.timer ? 16 : 140,
+                           layer.note || layer.keys ? 0 : layer.timer ? 16 : launcher_top_margin(height),
                            layer.timer && !layer.note ? 16 : 0, layer.keys ? 16 : 0, 0);
     /* Follow the bar's reserved space without reserving any ourselves. */
     wl_proxy_marshal_flags(layer.role, SET_EXCLUSIVE_ZONE, NULL, 1, 0, layer.timer ? 0 : -1);
