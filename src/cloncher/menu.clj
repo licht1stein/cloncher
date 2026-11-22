@@ -709,15 +709,47 @@
           (connection-result! "Copy Wi-Fi access details"
                               {:exit (:exit result) :err "Could not write to the clipboard."}))))))
 
-(defn- show-wifi-qr! [{:keys [device] :as network}]
-  (when (wifi-profile! network false)
-    ;; nmcli renders the standard Wi-Fi QR itself. --hold keeps it visible;
-    ;; credentials stay in the terminal, not argv, launcher rows, or temp files.
-    (connection-result! "Wi-Fi QR code"
-                        (p/sh {:continue true} "niri" "msg" "action" "spawn" "--"
-                              "kitty" "--hold" "--title" "Wi-Fi QR code" "-o" "shell=zsh"
-                              "nmcli" "--colors" "yes" "device" "wifi" "show-password"
-                              "ifname" device))))
+(defn- wifi-qr-escape
+  "Escape a value for a Wi-Fi QR payload: backslash, semicolon, comma, colon and quote."
+  [value]
+  (str/replace value #"([\\;,:\"])" "\\\\$1"))
+
+(defn- wifi-qr-preview
+  "The standard `WIFI:` QR code for the network, as SVG for the preview pane. The
+  password reaches qrencode on stdin and the SVG stays in memory: nothing in argv,
+  rows, or files carries it."
+  [{:keys [ssid] :as network}]
+  (if-let [{:keys [fields]} (wifi-profile! network true)]
+    (let [key-mgmt (get fields "802-11-wireless-security.key-mgmt" "")
+          type (cond (contains? #{"" "--" "owe"} key-mgmt) "nopass"
+                     (= "none" key-mgmt) "WEP"
+                     (contains? #{"wpa-psk" "sae"} key-mgmt) "WPA")
+          password (if (= "WEP" type)
+                     (get fields (str "802-11-wireless-security.wep-key"
+                                      (get fields "802-11-wireless-security.wep-tx-keyidx" "0")))
+                     (get fields "802-11-wireless-security.psk"))]
+      (cond
+        (nil? type)
+        {:notice "This network uses enterprise sign-in, which a QR code cannot share."}
+        (and (not= "nopass" type) (or (str/blank? password) (= "--" password)))
+        {:notice "The saved Wi-Fi password is unavailable. Check Wi-Fi settings."}
+        :else
+        (let [payload (str "WIFI:T:" type ";S:" (wifi-qr-escape ssid) ";"
+                           (when (not= "nopass" type) (str "P:" (wifi-qr-escape password) ";")) ";")
+              {:keys [exit out]} (p/sh {:in payload :continue true}
+                                       "qrencode" "--type" "SVG" "--margin" "2" "--output" "-")]
+          (if (zero? exit)
+            {:detail (str "Scan to join  ·  " ssid) :svg out}
+            {:notice "Could not draw the QR code. Is qrencode installed?"}))))
+    {:notice "Could not read the network's saved password."}))
+
+(defn- wifi-qr-view
+  "A view whose one row shows the network's QR code beside it."
+  [{:keys [ssid] :as network}]
+  {:prompt (str "Scan to join " ssid)
+   :items [{:icon "󰐲" :label ssid :subtitle "scan with a phone camera"
+            :volatile true
+            :preview {:id (str "wifi qr " ssid) :load #(wifi-qr-preview network)}}]})
 
 (defn- disconnect-wifi! [{:keys [device] :as network}]
   (when (wifi-profile! network false)
@@ -738,7 +770,7 @@
    :items [{:icon "󰅍" :label "Copy access details" :hint "copy network and password"
             :volatile true :action #(copy-wifi-access! network)}
            {:icon "󰐲" :label "Show QR code" :hint "share Wi-Fi access"
-            :volatile true :action #(show-wifi-qr! network)}
+            :volatile true :action (wifi-qr-view network)}
            {:icon "󰖪" :label "Disconnect" :hint "disconnect from this network"
             :volatile true :action #(disconnect-wifi! network)}
            {:icon "󰆴" :label "Forget" :hint "remove saved connection and password"

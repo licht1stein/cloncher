@@ -87,6 +87,8 @@ Pasting uses `wtype`: Ctrl+Shift+V in terminals, Shift+Insert in Emacs, and Ctrl
 
 See signal strength, security, and the connected network at a glance. Start a scan and the spinner appears on the scan row itself. The result list refreshes in place when the scan finishes.
 
+Open the connected network to copy its access details or show a QR code. The code appears in the launcher, next to the network, for a phone camera to scan. Cloncher draws it with `qrencode` in memory, and the password never reaches a file or a command line.
+
 [![Wi-Fi demo showing an inline scan spinner and a new network appearing](docs/media/wifi.gif)](docs/media/wifi.mp4)
 
 ### Calculate and reuse an answer

@@ -120,6 +120,12 @@
       (when (pos? texture) texture))
     (catch Exception _ nil)))
 
+(defn svg-thumbnail!
+  "Rasterize `svg` at `size` points from memory, never through a file."
+  [ui svg size]
+  (let [texture (svg-texture ui svg size)]
+    (when (pos? texture) {:texture texture :width size :height size})))
+
 (defn load-thumbnail! [ui bytes]
   (let [temporary (fs/create-temp-file {:prefix "cloncher-image-" :suffix ".png"})
         size (ffi/alloc 8)]

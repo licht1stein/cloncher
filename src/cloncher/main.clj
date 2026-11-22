@@ -350,9 +350,11 @@
         (when target (poll-jobs! ui)))
 
       (and job (job-ready? job))
-      (let [{:keys [bytes] :as answer} (try (job-value job) (catch Exception _ {:notice "Preview unavailable"}))]
-        (vreset! holder (assoc (dissoc answer :bytes) :target key
-                               :image (when bytes (cui/load-thumbnail! ui bytes)))))
+      (let [{:keys [bytes svg] :as answer} (try (job-value job) (catch Exception _ {:notice "Preview unavailable"}))]
+        ;; An SVG answer (a QR code) is rasterized from memory; its text never reaches a file.
+        (vreset! holder (assoc (dissoc answer :bytes :svg) :target key
+                               :image (cond bytes (cui/load-thumbnail! ui bytes)
+                                            svg (cui/svg-thumbnail! ui svg 512)))))
 
       (:working? current) (poll-jobs! ui))
     @holder))
