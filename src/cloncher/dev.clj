@@ -6,6 +6,8 @@
             [cloncher.menu :as menu]
             [cloncher.note :as note]
             [cloncher.palette :as palette]
+            [cloncher.panel :as panel]
+            [cloncher.timer-overlay :as timer-overlay]
             [cloncher.view :as view]
             [jolt.nrepl :as nrepl]))
 
@@ -97,7 +99,7 @@
         (cui/redraw! ui)))))
 
 (defn- off-panel! [ui]
-  (cui/column! ui "launcher-off" {:height 468 :surface? true})
+  (cui/column! ui "launcher-off" {:width view/preview-width :height 468 :surface? true})
   (try
     (cui/heading! ui "Launcher is off" 4)
     (finally (cui/end! ui))))
@@ -112,52 +114,102 @@
   (cui/column! ui id {:height 0 :pad 0 :gap 0})
   (cui/end! ui))
 
-(defn- note-preview!
-  "The quick-note card beside the launcher. Saving shows the entry instead of writing the scratchpad."
-  [ui]
-  (cui/column! ui "note-preview" {:width 0 :height 0 :pad 24 :gap 12})
+(defn- section-heading!
+  "A section title with an optional button on the right; return whether it was pressed."
+  [ui id title button primary?]
+  (cui/bar! ui id)
   (try
-    (cui/heading! ui "Note preview" 3)
-    (cui/apply-colors! ui (palette/load-colors))
-    (let [buffer @note-buffer
-          now (java.time.LocalDateTime/now)]
-      (case (note/preview! ui buffer {:title "Scratchpad" :at now})
-        :save (do (reset! note-entry (or (note/entry (cui/input-value buffer) now) "Nothing to append"))
-                  (cui/clear-input! buffer)
-                  (cui/redraw! ui))
-        :cancel (do (reset! note-entry "Cancelled") (cui/clear-input! buffer) (cui/redraw! ui))
-        nil)
-      (cui/wake-in! ui (- 60.0 (.getSecond now))))
-    (when-let [entry @note-entry]
-      (cui/caption! ui (str "Would append · " entry)))
+    (cui/heading! ui title 3)
+    (cui/spacer! ui)
+    (when button (cui/button! ui button primary?))
     (finally (cui/end! ui))))
 
+(defn- wallpaper!
+  "A rounded backdrop of palette stripes behind `body`, so translucent surfaces show
+  what they let through. `height` is :fit, or points for content that fills."
+  [ui id height body]
+  (panel/begin! ui id {:stack? true :height height :radius 16 :clip? true})
+  (try
+    (panel/begin! ui (str id "-stripes") {:row? true :height :fill})
+    (doseq [[i color] (map-indexed vector [:accent :danger :badge-text :selected-text])]
+      (panel/begin! ui (str id "-stripe-" i) {:height :fill :background color})
+      (cui/end! ui))
+    (cui/end! ui)
+    (panel/begin! ui (str id "-content") {:height (if (number? height) :fill :fit)
+                                          :pad-x 32 :pad-y 32 :gap 16})
+    (try (body) (finally (cui/end! ui)))
+    (finally (cui/end! ui))))
+
+(defn- launcher-section! [ui buffer]
+  (let [off? (= :off (app/status session))]
+    (when (section-heading! ui "launcher-heading" "Launcher" (if off? "Open launcher" "Turn off") off?)
+      (open-preview! ui buffer (if off? {:kind :root} {:kind :off})))
+    (wallpaper! ui "launcher-wallpaper" :fit
+      #(do (cui/bar! ui "launcher-centered")
+           (try
+             (cui/spacer! ui)
+             (if (= :on (app/status session))
+               (do
+                 (cui/apply-colors! ui (palette/load-colors))
+                 (app/draw-frame! session ui buffer {:preview? true})
+                 (when (= :complete (app/status session))
+                   (open-preview! ui buffer {:kind :off})))
+               (off-panel! ui))
+             (cui/spacer! ui)
+             (finally (cui/end! ui)))))))
+
+(defn- note-section!
+  "The quick-note card. Saving shows the entry instead of writing the scratchpad."
+  [ui]
+  (section-heading! ui "note-heading" "Quick note" nil false)
+  (cui/apply-colors! ui (palette/load-colors))
+  (let [buffer @note-buffer
+        now (java.time.LocalDateTime/now)]
+    (wallpaper! ui "note-wallpaper" (+ note/height 64)
+      #(case (note/render! ui buffer {:title "Scratchpad" :at now})
+         :save (do (reset! note-entry (or (note/entry (cui/input-value buffer) now) "Nothing to append"))
+                   (cui/clear-input! buffer)
+                   (cui/redraw! ui))
+         :cancel (do (reset! note-entry "Cancelled") (cui/clear-input! buffer) (cui/redraw! ui))
+         nil))
+    (cui/wake-in! ui (- 60.0 (.getSecond now))))
+  (when-let [entry @note-entry]
+    (cui/caption! ui (str "Would append · " entry))))
+
+(defn- timers-section! [ui]
+  (section-heading! ui "timers-heading" "Countdown and stopwatch" nil false)
+  (cui/apply-colors! ui (palette/load-colors))
+  (wallpaper! ui "timers-wallpaper" :fit #(timer-overlay/preview! ui)))
+
 (defn- render-preview!
+  "Center the previews: side by side when the window is wide enough, else stacked
+  in one column of the launcher's width. The page scrolls when it runs out of height."
   [ui buffer]
   (let [{:keys [open reconfigure]} (first (swap-vals! control dissoc :open :reconfigure))
         _ (cond open (open-preview! ui buffer open)
                 reconfigure (app/reconfigure! session))
-        off? (= :off (app/status session))
-        width (max 1 (min (+ view/preview-width 48) (- (cui/width ui) 16)))]
-    (cui/bar! ui "development-window")
+        launcher-width (+ view/preview-width 112)
+        widgets-width (+ note/width 112)
+        side? (>= (cui/width ui) (+ launcher-width widgets-width 32))
+        column! (fn [id width] (cui/column! ui id {:width width :height 0 :pad 24 :gap 14}))]
+    (cui/scroll! ui "development-page")
     (try
-      (spacer! ui "left-gutter")
-      (cui/column! ui "preview" {:width width :height 0 :pad 24 :gap 12})
+      (cui/bar! ui "development-window")
       (try
-        (cui/heading! ui "Launcher preview" 3)
-        (when (cui/button! ui (if off? "Open launcher" "Turn off") off?)
-          (open-preview! ui buffer (if off? {:kind :root} {:kind :off})))
-        (if (= :on (app/status session))
-          (do
-            (cui/apply-colors! ui (palette/load-colors))
-            (app/draw-frame! session ui buffer {:preview? true})
-            (when (= :complete (app/status session))
-              (open-preview! ui buffer {:kind :off})))
-          (off-panel! ui))
+        (spacer! ui "left-gutter")
+        (if side?
+          (do (column! "launcher-column" launcher-width)
+              (try (launcher-section! ui buffer) (finally (cui/end! ui)))
+              (column! "widgets-column" widgets-width)
+              (try (note-section! ui) (timers-section! ui) (finally (cui/end! ui))))
+          (do (column! "preview-column" (max 1 (min widgets-width (- (cui/width ui) 16))))
+              (try (launcher-section! ui buffer)
+                   (note-section! ui)
+                   (timers-section! ui)
+                   (finally (cui/end! ui)))))
+        (spacer! ui "right-gutter")
         (finally (cui/end! ui)))
-      (note-preview! ui)
-      (spacer! ui "right-gutter")
-      (finally (cui/end! ui))))
+      (finally (cui/end-scroll! ui))))
   (screenshot-frame! ui))
 
 (defn render!

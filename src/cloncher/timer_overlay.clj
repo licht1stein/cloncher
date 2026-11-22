@@ -120,6 +120,93 @@
                    (finally (socket/close! fd)))]
         (when-not stop (recur))))))
 
+(defn- draw-card!
+  "Draw a timer reading as the 300×108 card, with its top left at the drawing origin."
+  [ui {:keys [phase digits label progress latest-lap]}]
+  (let [lap (when latest-lap (str "Lap " (:number latest-lap) " · " (:split latest-lap)))]
+    (case phase
+      "paused" (card! ui digits label (if lap (str "Paused · " lap) "Paused") progress 1)
+      "finished" (card! ui digits label "Time’s up" progress 2)
+      (card! ui digits label (or lap "") progress 0))))
+
+;; ── development preview ─────────────────────────────────────────────────────
+;; The card draws at fixed coordinates, so each sits in a CUI canvas: its paint
+;; callback runs after layout and moves the drawing origin to the canvas.
+
+(ffi/defcfn ^:private canvas* "cui_canvas"
+  [:pointer :string [:by-value [:struct [[:kind :int] [:value :float]]]]
+   [:by-value [:struct [[:kind :int] [:value :float]]]] :pointer :pointer :size_t]
+  [:by-value [:struct [[:x :float] [:y :float] [:w :float] [:h :float]
+                       [:hovered :bool] [:pressed :bool] [:clicked :bool] [:mx :float] [:my :float]]]])
+(ffi/defcfn ^:private push-origin! "cui__push_xform" [:pointer :float :float :float :float :float :float] :void)
+(ffi/defcfn ^:private pop-origin! "cui__pop_xform" [:pointer] :void)
+
+(def ^:private canvas-result
+  (ffi/layout [:struct [[:x :float] [:y :float] [:w :float] [:h :float]
+                        [:hovered :bool] [:pressed :bool] [:clicked :bool] [:mx :float] [:my :float]]]))
+
+(defonce ^:private preview-cards (atom {}))
+(defonce ^:private preview-started (System/nanoTime))
+
+;; One painter for the process: CUI calls it after the frame function returns.
+(defonce ^:private painter
+  (delay (ffi/foreign-callable
+          (fn [ui user]
+            (let [index (ffi/read user :int)
+                  {:keys [origin reading]} (get @preview-cards index)
+                  [x y] origin]
+              (when reading
+                (push-origin! ui 1.0 0.0 0.0 1.0 (double x) (double y))
+                (try (draw-card! ui reading)
+                     (finally (pop-origin! ui))))))
+          ;; cui_paint_fn(ui, cui_rect rect, user): the rect travels in SSE registers,
+          ;; leaving ui and user as the two integer arguments.
+          [:pointer :pointer] :void :collect-safe)))
+
+(defn- sample-timers
+  "A running countdown, a stopwatch with laps, and a finished countdown, all live."
+  [now]
+  (let [elapsed (- now preview-started)
+        minute (* 60 second-ns)
+        started (- now elapsed (* 2 minute))   ; the stopwatch has run two minutes longer than the preview
+        stopwatch {:id "stopwatch" :kind "stopwatch" :label "Stopwatch" :phase "running" :start started :elapsed 0}]
+    [{:id "countdown" :kind "countdown" :label "Tea" :total (* 5 minute) :phase "running"
+      :start (- now (mod elapsed (* 5 minute))) :elapsed 0}
+     (-> stopwatch
+         (record-lap (+ started (* 41 second-ns)))
+         (record-lap (+ started (* 90 second-ns))))
+     {:id "finished" :kind "countdown" :label "Countdown" :total minute :phase "finished"
+      :start nil :elapsed minute :finished-at (- now (mod elapsed (* 3 second-ns)))}]))
+
+(defn preview!
+  "Development: the running countdown and stopwatch in one row, the finished countdown
+  below, ticking and ringing as the overlay does."
+  [ui]
+  (let [now (System/nanoTime)
+        readings (mapv #(reading % now) (sample-timers now))
+        size-layout (ffi/layout [:struct [[:kind :int] [:value :float]]])
+        width (doto (ffi/alloc (ffi/sizeof size-layout)) (ffi/write size-layout {:kind 2 :value 300.0}))
+        height (doto (ffi/alloc (ffi/sizeof size-layout)) (ffi/write size-layout {:kind 2 :value 108.0}))
+        result (ffi/alloc (ffi/sizeof canvas-result))
+        user (ffi/alloc 4)]
+    (try
+      (doseq [row [[0 1] [2]]]
+        (cui/bar! ui (str "timer-preview-row-" (first row)))
+        (try
+          (cui/spacer! ui)
+          (doseq [index row]
+            (ffi/write user :int index)
+            #_{:clj-kondo/ignore [:invalid-arity]}
+            (canvas* result ui (str "timer-preview-" index) width height @painter user 4)
+            ;; The canvas reports last frame's rectangle; layout is stable between frames.
+            (let [{:keys [x y]} (ffi/read result canvas-result)]
+              (swap! preview-cards assoc index {:origin [x y] :reading (readings index)})
+              (when (zero? (+ x y)) (cui/redraw! ui))))
+          (cui/spacer! ui)
+          (finally (cui/end! ui))))
+      (cui/wake-in! ui (reduce min 1.0 (map :delay readings)))
+      (finally (ffi/free width) (ffi/free height) (ffi/free result) (ffi/free user)))))
+
 (defn worker! [path initial load-cui!]
   (if-let [listener (socket/listen! path)]
     (try
@@ -142,17 +229,13 @@
                 (do
                   (when-not @ready?
                     (vreset! state (assoc initial-timer :start (System/nanoTime))))
-                  (let [{:keys [phase digits label progress delay latest-lap]} (update-timer! state nil)
-                        lap (when latest-lap (str "Lap " (:number latest-lap) " · " (:split latest-lap)))
+                  (let [{:keys [delay] :as reading} (update-timer! state nil)
                         now (System/currentTimeMillis)]
                     (when (>= now @reload-at)
                       (vreset! colors (palette/load-colors))
                       (vreset! reload-at (+ now 1000)))
                     (cui/apply-colors! ui @colors)
-                    (case phase
-                      "paused" (card! ui digits label (if lap (str "Paused · " lap) "Paused") progress 1)
-                      "finished" (card! ui digits label "Time’s up" progress 2)
-                      (card! ui digits label (or lap "") progress 0))
+                    (draw-card! ui reading)
                     (when-not @ready?
                       (vreset! controls (future (serve-controls! listener state stop? redraw)))
                       (vreset! ready? true)

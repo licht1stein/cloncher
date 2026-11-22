@@ -49,13 +49,14 @@
     (ffi/write pointer (ffi/place layout field) {:kind kind :value (double value)})))
 
 (defn begin!
-  [ui id {:keys [row? width height pad-x pad-y gap background border radius clip?]
+  "Open a box; close it with `cui/end!`. A `:stack?` box overlaps its children."
+  [ui id {:keys [row? stack? width height pad-x pad-y gap background border radius clip?]
           :or {width :fill height :fit pad-x 0 pad-y 0 gap 0}}]
   (let [options (ffi/alloc (ffi/sizeof box-layout))
         c-id (ffi/string->ptr id)]
     (try
       (ffi/write-field options box-layout :id c-id)
-      (ffi/write-field options box-layout :dir (if row? 1 0))
+      (ffi/write-field options box-layout :dir (cond stack? 2 row? 1 :else 0))
       (write-size! options box-layout :width width)
       (write-size! options box-layout :height height)
       (doseq [[field value] [[:pad-x pad-x] [:pad-y pad-y] [:gap gap]

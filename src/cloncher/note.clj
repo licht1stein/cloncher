@@ -93,8 +93,8 @@
 (def ^:private aligns {:start 1 :center 2 :end 3 :stretch 4})
 (def ^:private fonts {:body 0 :medium 1 :display 2 :mono 3})
 (def ^:private tokens
-  {:background 1 :surface 2 :foreground 5 :secondary 6 :muted 7 :border 8 :border-subtle 9
-   :accent 11 :accent-foreground 14 :danger 17 :warning 16 :info 18})
+  {:background 1 :surface 2 :foreground 5 :muted 7 :border-subtle 9
+   :accent 11 :accent-foreground 14 :danger 17})
 
 (def ^:private icons
   {:notebook "\uE596" :close "\uE1B2"})
@@ -211,16 +211,6 @@
         (kbd! ui "Ctrl Enter")
         (text! ui "save" {:size 12 :color muted :nowrap? true})))
     @action))
-
-(defn preview!
-  "Development: the card at its overlay size, over a backdrop that shows its translucency."
-  [ui buffer options]
-  (in-box ui {:dir :stack :width [:px (+ width 64)] :height [:px (+ height 64)] :radius 16 :clip true}
-    (in-box ui {:dir :row :width [:fill 1] :height [:fill 1]}
-      (doseq [token [:accent :danger :warning :info]]
-        (in-box ui {:width [:fill 1] :height [:fill 1] :bg (color ui token 255)})))
-    (in-box ui {:width [:fill 1] :height [:fill 1] :pad 32}
-      (render! ui buffer options))))
 
 ;; ── overlay process ─────────────────────────────────────────────────────────
 
