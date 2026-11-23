@@ -76,15 +76,18 @@
 (def ^:private run-gap-ms 1500)
 
 (def ^:private combo-gap-ms 1000)
+(def ^:private keyboard-quit [#{:ctrl} 34])   ; C-g
 
 (defn- joins-combo?
   "A guess at Emacs key sequences, without its keymaps: a chord within a second of a chord
   continues the sequence (`C-x C-f`), and so does a plain key after a Ctrl chord (`C-c c`).
-  A plain key after Meta starts afresh, since `M-x` is followed by typing."
-  [{:keys [emacs? entries at]} mods now]
+  A plain key after Meta starts afresh, since `M-x` is followed by typing. `C-g` cancels:
+  it never joins a sequence, and the key after it starts a new one."
+  [{:keys [emacs? entries at]} mods code now]
   (let [{:keys [sequence] :as last-entry} (peek entries)
-        [previous-mods previous-code] (peek sequence)]
+        [previous-mods previous-code :as previous] (peek sequence)]
     (boolean (and emacs? (:emacs? last-entry) previous-code (seq previous-mods)
+                  (not= keyboard-quit [mods code]) (not= keyboard-quit previous)
                   (< (- now (or at 0)) combo-gap-ms)
                   (or (seq (disj mods :shift)) (previous-mods :ctrl))))))
 
@@ -127,7 +130,7 @@
             space? (and (= 57 code) (empty? mods) (:text last-entry) recent?)
             last-index (dec (count entries))]
         (cond
-          (and (= 1 value) (joins-combo? state mods now))
+          (and (= 1 value) (joins-combo? state mods code now))
           (-> state (update-in [:entries last-index :sequence] conj [mods code]) (assoc :at now))
 
           (or text? space?)
