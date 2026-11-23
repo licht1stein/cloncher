@@ -17,10 +17,17 @@
 (def ^:private file-preview-minimum 300)
 (def ^:private radius 12)   ; niri's geometry-corner-radius, so the launcher matches the windows
 
+;; The quick-note card's translucency: the panel and its border let the desktop through,
+;; and a bar on it is fainter still. Accents, badges and the selection stay opaque.
+(def ^:private panel-alpha 222)
+(def ^:private border-alpha 170)
+(def ^:private bar-alpha 120)
+
 (defn begin! [ui preview? fit?]
   (panel/begin! ui "launcher" {:width (if preview? (min preview-width (max 1 (- (cui/width ui) 64))) :fill)
                                :height (if fit? :fill :fit)
-                               :background :background :border 1 :radius radius :clip? true}))
+                               :background [:background panel-alpha] :border 1
+                               :border-color [:border border-alpha] :radius radius :clip? true}))
 
 (defn- single-line [text]
   (str/replace (or text "") #"[\r\n\t\u0000]" " "))
@@ -120,7 +127,7 @@
                           ";label select"))]
     (cui/separator! ui)
     ;; The bar fills the panel's bottom edge, so its corners follow the panel's.
-    (panel/begin! ui "status" {:row? true :height status-height :background :surface
+    (panel/begin! ui "status" {:row? true :height status-height :background [:surface bar-alpha]
                                :radius-bl radius :radius-br radius})
     (try
       (when (seq mode)
@@ -141,10 +148,9 @@
         detail (single-line (or (not-empty subtitle) path))
         detail-width (min (max 0 (quot width 2)) (* 8 (count detail)))
         native-id (panel/begin! ui id {:row? true :height height
-                                      :background (cond selected? :active state :surface :else :background)})]
+                                      :background (cond selected? :active state [:surface bar-alpha])})]
     (try
-      (panel/begin! ui "indicator" {:width 2 :height height
-                                     :background (if selected? :accent :background)})
+      (panel/begin! ui "indicator" {:width 2 :height height :background (when selected? :accent)})
       (cui/end! ui)
       (panel/begin! ui "content" {:row? true :height height :pad-x 12 :gap 9})
       (try
@@ -173,7 +179,7 @@
 (defn- hairline!
   "A visible hairline; CUI's own separator takes the palette's border, which matches the background."
   [ui id]
-  (panel/begin! ui id {:height 1 :background :border})
+  (panel/begin! ui id {:height 1 :background [:border border-alpha]})
   (cui/end! ui))
 
 (defn divider!
@@ -199,7 +205,8 @@
 (defn file-preview!
   "The preview pane: an image, numbered lines of a file, or `text` wrapped as prose."
   [ui width path {:keys [notice detail image lines text working?]}]
-  (cui/column! ui "file-preview" {:width width :pad 12 :gap 4 :surface? true})
+  (panel/begin! ui "file-preview" {:width width :height :fill :pad-x 12 :pad-y 12 :gap 4
+                                   :background [:surface bar-alpha]})
   (try
     (cui/caption! ui (or detail "Preview"))
     (cui/scroll! ui (str "preview-" path))

@@ -10,6 +10,7 @@
 (ffi/defcfn ^:private rect* "cui_get_rect" [:pointer :uint32]
   [:by-value [:struct [[:x :float] [:y :float] [:w :float] [:h :float]]]])
 (ffi/defcfn ^:private mouse-clicked? "cui_mouse_clicked" [:pointer :int] :bool)
+(ffi/defcfn ^:private color-of "cui_color_of" [:pointer :uint64] :uint64)
 
 
 (def ^:private box-layout
@@ -44,14 +45,27 @@
 (defn- token [color]
   {:r (get tokens color 0) :g 197 :b 29 :a 0 :token 0})
 
+(defn- fill
+  "A theme token, or `[token alpha]`: the token resolved and given `alpha`, as the
+  quick-note card does. Resolve first: CUI encodes a token as a color."
+  [ui color]
+  (if (vector? color)
+    (let [[color alpha] color
+          {:keys [r g b]} (token color)
+          rgb (color-of ui (bit-or r (bit-shift-left g 8) (bit-shift-left b 16)))]
+      {:r (bit-and rgb 0xFF) :g (bit-and (bit-shift-right rgb 8) 0xFF)
+       :b (bit-and (bit-shift-right rgb 16) 0xFF) :a alpha :token 0})
+    (token color)))
+
 (defn- write-size! [pointer layout field size]
   (let [[kind value] (cond (= :fill size) [1 1] (number? size) [2 size] :else [0 0])]
     (ffi/write pointer (ffi/place layout field) {:kind kind :value (double value)})))
 
 (defn begin!
   "Open a box; close it with `cui/end!`. A `:stack?` box overlaps its children.
-  `:radius-bl` and `:radius-br` round a bottom corner on their own."
-  [ui id {:keys [row? stack? width height pad-x pad-y gap background border radius radius-bl radius-br clip?]
+  `:radius-bl` and `:radius-br` round a bottom corner on their own. `:background` and
+  `:border-color` take a theme token or `[token alpha]`."
+  [ui id {:keys [row? stack? width height pad-x pad-y gap background border border-color radius radius-bl radius-br clip?]
           :or {width :fill height :fit pad-x 0 pad-y 0 gap 0}}]
   (let [options (ffi/alloc (ffi/sizeof box-layout))
         c-id (ffi/string->ptr id)]
@@ -65,8 +79,8 @@
                              [:radius-bl (or radius-bl 0)] [:radius-br (or radius-br 0)]]]
         (ffi/write-field options box-layout field (double value)))
       (ffi/write-field options box-layout :align (if row? 2 4))
-      (when background (ffi/write options (ffi/place box-layout :bg) (token background)))
-      (when border (ffi/write options (ffi/place box-layout :border-color) (token :border)))
+      (when background (ffi/write options (ffi/place box-layout :bg) (fill ui background)))
+      (when border (ffi/write options (ffi/place box-layout :border-color) (fill ui (or border-color :border))))
       (when clip? (ffi/write-field options box-layout :clip true))
       (box* ui options)
       (finally (ffi/free options) (ffi/free c-id)))))
