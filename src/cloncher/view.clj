@@ -15,7 +15,7 @@
 (def ^:private divider-height 13)   ; a hairline with 6 points of air above and below
 (def ^:private chrome-height (+ prompt-height status-height separator-height))
 (def ^:private file-preview-minimum 300)
-(def ^:private radius 6)
+(def ^:private radius 12)   ; niri's geometry-corner-radius, so the launcher matches the windows
 
 (defn begin! [ui preview? fit?]
   (panel/begin! ui "launcher" {:width (if preview? (min preview-width (max 1 (- (cui/width ui) 64))) :fill)
