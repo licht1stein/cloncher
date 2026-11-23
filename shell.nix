@@ -41,4 +41,7 @@ pkgs.mkShell {
     pkgs.libqalculate
     pkgs.wl-clipboard
   ];
+  # Jolt runs on Nix's loader, which cannot load the system's GL driver: without one
+  # its windows never draw. `jolt dev` and `jolt prod` hand Jolt this pinned Mesa.
+  CLONCHER_EGL_VENDOR = "${pkgs.mesa}/share/glvnd/egl_vendor.d/50_mesa.json";
 }

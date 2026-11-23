@@ -211,6 +211,8 @@ To configure Tailscale switching, add a top-level `:tailnets` vector to your loc
 
 Build the host once with `bin/build-cui` or export `CLONCHER_CUI_LIBRARY` before launching.
 
+In the Nix shell, `jolt dev` and `jolt prod` hand Jolt the pinned Mesa: Jolt runs on Nix's loader, which cannot load the system's GL driver, and its windows would never draw. Set `__EGL_VENDOR_LIBRARY_FILENAMES` to choose another driver.
+
 ```sh
 jolt dev
 jolt eval desktop --ns user -e '(cloncher.dev/show! :files)'

@@ -5,12 +5,19 @@
            :dev {:main-opts ["-m" "cloncher.dev"]}
            :eval {:extra-paths ["dev"] :main-opts ["-m" "cloncher.eval"]}
            :test {:extra-paths ["test"] :main-opts ["-m" "cloncher.parity-test"]}}
- :tasks {dev {:doc "Open a CUI development window with a loopback nREPL."
-              :task (apply shell "jolt" "-Srepro" "-M:dev" *command-line-args*)}
+ :tasks {:init (defn gl-env
+                 "The GL driver for a Jolt window: shell.nix's pinned Mesa, unless the caller chose one."
+                 []
+                 (let [vendor (System/getenv "CLONCHER_EGL_VENDOR")]
+                   (if (and vendor (not (System/getenv "__EGL_VENDOR_LIBRARY_FILENAMES")))
+                     {"__EGL_VENDOR_LIBRARY_FILENAMES" vendor}
+                     {})))
+         dev {:doc "Open a CUI development window with a loopback nREPL."
+              :task (apply shell {:extra-env (gl-env)} "jolt" "-Srepro" "-M:dev" *command-line-args*)}
          eval {:doc "Evaluate a form in the running Cloncher Dev window."
                :task (apply shell "jolt" "-Srepro" "-M:eval" *command-line-args*)}
          prod {:doc "Run one launcher request without the development REPL."
-               :task (System/exit (:exit (apply shell {:continue true}
+               :task (System/exit (:exit (apply shell {:continue true :extra-env (gl-env)}
                                                 "jolt" "-Srepro" "-M:prod" *command-line-args*)))}
          release {:doc "Build target/cloncher, preferring a compiler-free native executable."
                   :task (shell "jolt" "-A:cli" "-f" "bin/release.clj")}
