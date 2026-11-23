@@ -144,7 +144,7 @@
 
 ;; The cursor is a rounded block inset from the panel's edges, rounded less than the panel.
 (def ^:private cursor-inset 6)
-(def ^:private cursor-radius 8)
+(def ^:private cursor-radius 5)
 
 (defn- row* [ui id {:keys [icon label display-shortcut warn state subtitle path texture running-progress] :as row}
              selected? actionable? width]
