@@ -333,21 +333,65 @@
 (def ^:private text-types ["text/plain;charset=utf-8" "text/plain" "UTF8_STRING" "STRING" "TEXT"])
 (def ^:private image-types ["image/png" "image/jpeg" "image/webp" "image/gif" "image/bmp"])
 
-(defn- wl-paste [& args]
-  @(apply p/process {:out :bytes :err :discard :continue true} "wl-paste" args))
+;; Every request to the selection's owner is bounded: an application that never answers
+;; must not wedge the capture, and with it `wl-paste --watch` and every later copy.
+(def ^:private paste-timeout-ms 3000)
+
+(defn- wl-paste
+  "The output of wl-paste with `args`, or nil when it fails or outlasts `paste-timeout-ms`."
+  [& args]
+  (let [child (apply p/process {:out :bytes :err :discard :continue true} "wl-paste" args)
+        result (deref child paste-timeout-ms ::timeout)]
+    (cond (= ::timeout result) (do (p/destroy-tree child) nil)
+          (zero? (:exit result)) (:out result))))
+
+(defn- textual?
+  "wl-paste's test for a text type."
+  [mime]
+  (boolean (or (str/starts-with? mime "text/") (#{"TEXT" "STRING" "UTF8_STRING"} mime)
+               (str/includes? mime "json") (str/includes? mime "application/vnd.ms-publisher")
+               (some #(str/ends-with? mime %) ["script" "xml" "yaml" "csv" "ini" "pgp-keys"]))))
+
+(defn- watched-type
+  "The type of `types`, in offer order, that `wl-paste --watch` without `--type` pipes
+  to its command: plain UTF-8 text, plain text, any text, else the first type."
+  [types]
+  (or (some #{"text/plain;charset=utf-8"} types) (some #{"text/plain"} types)
+      (first (filter textual? types)) (first types)))
+
+(defn- drain
+  "Read `input` to its end; its bytes, or nil past `limit`. Whatever the size, every
+  byte is read, so the application writing the selection is never left blocked."
+  [^java.io.InputStream input limit]
+  (let [buffer (byte-array 65536)
+        out (java.io.ByteArrayOutputStream.)]
+    (loop [kept? true]
+      (let [n (.read input buffer 0 (alength buffer))]
+        (cond
+          (neg? n) (when kept? (.toByteArray out))
+          (and kept? (<= (+ (.size out) n) limit)) (do (.write out buffer 0 n) (recur true))
+          :else (do (.reset out) (recur false)))))))
 
 (defn capture!
-  "Record the current clipboard. `wl-paste --watch` runs this on every change.
-  Selections a password manager marks secret are not kept."
+  "Record the clipboard change `wl-paste --watch` pipes to stdin. The pipe is read to
+  its end first: the copying application writes the selection into it, and one that
+  writes synchronously (Qt apps, wl-copy) stalls until it is read, unable to answer
+  any other paste. Only then is the selection asked again, when the piped type is not
+  the one kept. Selections a password manager marks secret are not kept."
   []
-  (let [types (set (str/split-lines (String. (:out (wl-paste "--list-types")) "UTF-8")))
-        secret? (and (types "x-kde-passwordManagerHint")
-                     (= "secret" (str/trim (String. (:out (wl-paste "--type" "x-kde-passwordManagerHint")) "UTF-8"))))
-        text-type (some types text-types)
-        mime (if text-type "text/plain;charset=utf-8" (some types image-types))]
+  (let [piped (drain System/in max-image-bytes)
+        types (some-> (wl-paste "--list-types") (String. "UTF-8") str/split-lines vec)
+        offered (set types)
+        secret? (and (offered "x-kde-passwordManagerHint")
+                     ;; Unreadable counts as secret.
+                     (not= "public" (some-> (wl-paste "--type" "x-kde-passwordManagerHint")
+                                            (String. "UTF-8") str/trim)))
+        text-type (some offered text-types)
+        mime (if text-type "text/plain;charset=utf-8" (some offered image-types))
+        wanted (or text-type mime)]
     (when (and mime (not secret?))
-      (let [{:keys [exit out]} (wl-paste "--no-newline" "--type" (or text-type mime))]
-        (when (and (zero? exit) (pos? (alength out))
+      (let [out (if (= wanted (watched-type types)) piped (wl-paste "--no-newline" "--type" wanted))]
+        (when (and out (pos? (alength out))
                    (<= (alength out) (if text-type max-text-bytes max-image-bytes))
                    (not (and text-type (str/blank? (String. out "UTF-8")))))
           (update-store! #(add-entry % mime out (System/currentTimeMillis))))))))
