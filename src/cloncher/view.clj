@@ -142,36 +142,42 @@
       (cui/end! ui)
       (finally (cui/end! ui)))))
 
+;; The cursor is a rounded block inset from the panel's edges, rounded less than the panel.
+(def ^:private cursor-inset 6)
+(def ^:private cursor-radius 8)
+
 (defn- row* [ui id {:keys [icon label display-shortcut warn state subtitle path texture running-progress] :as row}
              selected? actionable? width]
   (let [height (or (:row-height row) (row-height row))
         detail (single-line (or (not-empty subtitle) path))
         detail-width (min (max 0 (quot width 2)) (* 8 (count detail)))
-        native-id (panel/begin! ui id {:row? true :height height
-                                      :background (cond selected? :active state [:surface bar-alpha])})]
+        native-id (panel/begin! ui id {:row? true :height height :pad-x cursor-inset})]
     (try
-      (panel/begin! ui "indicator" {:width 2 :height height :background (when selected? :accent)})
-      (cui/end! ui)
-      (panel/begin! ui "content" {:row? true :height height :pad-x 12 :gap 9})
+      (panel/begin! ui "cursor" {:row? true :height height :radius cursor-radius
+                                 :background (cond selected? :active state [:surface bar-alpha])})
       (try
-        (panel/begin! ui "glyph" {:row? true :width 30 :height height :pad-x 2})
-        (cond
-          running-progress (do (cui/spacer! ui) (cui/spinner! ui 12.5) (cui/spacer! ui))
-          texture (do (cui/spacer! ui) (panel/image! ui texture icon-size) (cui/spacer! ui))
-          :else (panel/text! ui (or icon "") {:width :fill :center? true :color (if state :secondary :accent)
-                                              :size (if (= 41 height) 26 glyph-size)}))
-        (cui/end! ui)
-        (panel/text! ui (single-line (or (:label running-progress) label))
-                     {:width :fill :color (cond state :secondary selected? :selected-text :else :foreground)})
-        (when (pos? detail-width)
-          (if state
-            (do (panel/begin! ui "badge" {:row? true :height 18 :width :fit :pad-x 7
-                                           :background :badge :radius 3})
-                (panel/text! ui detail {:color (if warn :danger :badge-text)
-                                         :right? true :width detail-width})
-                (cui/end! ui))
-            (panel/text! ui detail {:width detail-width :right? true :color (if warn :danger :muted)})))
-        (panel/text! ui (or display-shortcut "") {:width 28 :right? true :size 10 :color :muted})
+        ;; The inset plus this padding keeps the glyphs where they were.
+        (panel/begin! ui "content" {:row? true :height height :pad-x 8 :gap 9})
+        (try
+          (panel/begin! ui "glyph" {:row? true :width 30 :height height :pad-x 2})
+          (cond
+            running-progress (do (cui/spacer! ui) (cui/spinner! ui 12.5) (cui/spacer! ui))
+            texture (do (cui/spacer! ui) (panel/image! ui texture icon-size) (cui/spacer! ui))
+            :else (panel/text! ui (or icon "") {:width :fill :center? true :color (if state :secondary :accent)
+                                                :size (if (= 41 height) 26 glyph-size)}))
+          (cui/end! ui)
+          (panel/text! ui (single-line (or (:label running-progress) label))
+                       {:width :fill :color (cond state :secondary selected? :selected-text :else :foreground)})
+          (when (pos? detail-width)
+            (if state
+              (do (panel/begin! ui "badge" {:row? true :height 18 :width :fit :pad-x 7
+                                             :background :badge :radius 3})
+                  (panel/text! ui detail {:color (if warn :danger :badge-text)
+                                           :right? true :width detail-width})
+                  (cui/end! ui))
+              (panel/text! ui detail {:width detail-width :right? true :color (if warn :danger :muted)})))
+          (panel/text! ui (or display-shortcut "") {:width 28 :right? true :size 10 :color :muted})
+          (finally (cui/end! ui)))
         (finally (cui/end! ui)))
       (and actionable? (panel/clicked? ui native-id))
       (finally (cui/end! ui)))))
