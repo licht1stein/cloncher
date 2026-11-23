@@ -11,6 +11,7 @@ static pthread_mutex_t prepared_theme_lock = PTHREAD_MUTEX_INITIALIZER;
 static host_frame_waker *prepared_theme_waker;
 
 extern bool cloncher_layer_ready(void);
+extern bool cloncher_layer_active(void);
 extern bool cloncher_attach_layer(int, int);
 extern void cloncher_defer_layer(bool);
 extern bool cloncher_is_timer_overlay(const char *);
@@ -41,6 +42,12 @@ static void reset_timer_colors(cui_ctx *ui) {
         if (mode != ui->mode) cui__theme_init(ui, mode, ui->accent);
     }
     memcpy(ui->theme.colors, ui->target_theme.colors, sizeof ui->theme.colors);
+}
+
+/* On its layer surface the launcher clears to transparent around its rounded panel.
+ * A software picture goes through SDL's framebuffer and stays opaque. */
+static bool launcher_transparent(cui_app *app, const char *app_id) {
+    return app_id && !strcmp(app_id, "cloncher.launcher") && cloncher_layer_active() && !cui_app_is_software(app);
 }
 
 static void launcher_load_fonts(cui_app *app) {

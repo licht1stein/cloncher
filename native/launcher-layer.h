@@ -7,6 +7,7 @@ SDL_Window *cloncher_create_window(const char *, int, int, SDL_WindowFlags);
 void cloncher_destroy_window(SDL_Window *);
 bool cloncher_set_window_size(SDL_Window *, int, int);
 void cloncher_present_timer(const void *, int, int, int);
+bool cloncher_layer_overlay(void);
 
 /* Applied only while compiling CUI's SDL backend. */
 #define SDL_CreateWindow cloncher_create_window

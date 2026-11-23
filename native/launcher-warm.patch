@@ -26,7 +26,7 @@
      free(icon);   /* the window copied it into its _NET_WM_ICON property */
 -    if (!host_app) { host_theme_unwatch(); return 1; }
 +    if (!host_app) { launcher_unwatch_theme(); return 1; }
-+    if (timer_overlay) cui_app_ui(host_app)->transparent_root = true;
++    if (timer_overlay || launcher_transparent(host_app, desc.app_id)) cui_app_ui(host_app)->transparent_root = true;
      host_frame_bind(waker, host_app, wake_window);
      cui_app_set_animator(host_app, animation_next, animation_step, waker);
      cui_app_ui(host_app)->host_window=host_app;
@@ -115,7 +115,7 @@
 +++ src/platform/cui_app_sdl3.c
 @@ -317,6 +317,10 @@
  void cui__plat_present(cui_app *app, const void *bgra, int w, int h, int stride) {
-+    if (app->ui->transparent_root) {
++    if (cloncher_layer_overlay()) {
 +        cloncher_present_timer(bgra, w, h, stride);
 +        return;
 +    }
@@ -128,7 +128,7 @@
      SDL_GetWindowSizeInPixels(s->win, &pw, &ph);
      float sc = SDL_GetWindowDisplayScale(s->win);
      if (sc <= 0) sc = 1;
-+    if (app->ui->transparent_root) {
++    if (cloncher_layer_overlay()) {
 +        int logical_width, logical_height;
 +        SDL_GetWindowSize(s->win, &logical_width, &logical_height);
 +        *w = (float)logical_width;

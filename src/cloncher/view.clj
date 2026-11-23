@@ -15,11 +15,12 @@
 (def ^:private divider-height 13)   ; a hairline with 6 points of air above and below
 (def ^:private chrome-height (+ prompt-height status-height separator-height))
 (def ^:private file-preview-minimum 300)
+(def ^:private radius 6)
 
 (defn begin! [ui preview? fit?]
   (panel/begin! ui "launcher" {:width (if preview? (min preview-width (max 1 (- (cui/width ui) 64))) :fill)
                                :height (if fit? :fill :fit)
-                               :background :background :border 1 :radius 6 :clip? true}))
+                               :background :background :border 1 :radius radius :clip? true}))
 
 (defn- single-line [text]
   (str/replace (or text "") #"[\r\n\t\u0000]" " "))
@@ -118,11 +119,13 @@
                           (when nested? "⌫ back  ")
                           ";label select"))]
     (cui/separator! ui)
-    (panel/begin! ui "status" {:row? true :height status-height :background :surface})
+    ;; The bar fills the panel's bottom edge, so its corners follow the panel's.
+    (panel/begin! ui "status" {:row? true :height status-height :background :surface
+                               :radius-bl radius :radius-br radius})
     (try
       (when (seq mode)
         (panel/begin! ui "status-mode" {:height status-height :width :fit :row? true
-                                         :background :accent :pad-x 10})
+                                         :background :accent :pad-x 10 :radius-bl radius})
         (panel/text! ui mode {:color :accent-text})
         (cui/end! ui))
       (panel/begin! ui "status-hint" {:row? true :height status-height :width :fill :pad-x 10})

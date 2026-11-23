@@ -83,6 +83,7 @@ bool cloncher_is_timer_overlay(const char *app_id) {
 }
 
 bool cloncher_layer_active(void) { return layer.role != NULL; }
+bool cloncher_layer_overlay(void) { return layer.timer; }
 bool cloncher_layer_ready(void) { return layer.shell != NULL; }
 void cloncher_defer_layer(bool defer) { defer_layer = defer; }
 
@@ -274,16 +275,19 @@ SDL_Window *cloncher_create_window(const char *title, int width, int height, SDL
     const bool timer = cloncher_is_timer_overlay(app_id);
     if (!timer && (!app_id || strcmp(app_id, "cloncher.launcher")))
         return SDL_CreateWindow(title, width, height, flags);
+    /* Every layer surface can show what is behind it: the overlays are translucent
+     * cards, and the launcher's rounded corners are cut out of its window. */
+    SDL_WindowFlags role_flags = flags | SDL_WINDOW_TRANSPARENT;
     if (timer) {
         const char *driver = SDL_GetCurrentVideoDriver();
         if (!driver || strcmp(driver, "wayland")) {
             SDL_SetError("cloncher.timer-overlay requires Wayland");
             return NULL;
         }
-        flags = (flags & ~SDL_WINDOW_RESIZABLE) | SDL_WINDOW_TRANSPARENT;
-        if (!SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8))
-            return NULL;
+        role_flags &= ~SDL_WINDOW_RESIZABLE;
     }
+    if (!SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8) && timer)
+        return NULL;
 
     SDL_PropertiesID props = SDL_CreateProperties();
     if (!props)
@@ -291,10 +295,9 @@ SDL_Window *cloncher_create_window(const char *title, int width, int height, SDL
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, title);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, width);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_FLAGS_NUMBER, flags);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_FLAGS_NUMBER, role_flags);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_WAYLAND_SURFACE_ROLE_CUSTOM_BOOLEAN, true);
-    if (timer)
-        SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_TRANSPARENT_BOOLEAN, true);
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_TRANSPARENT_BOOLEAN, true);
     SDL_Window *window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
     if (!window)
