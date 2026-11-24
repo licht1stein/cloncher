@@ -1,6 +1,7 @@
 (ns cloncher.dev
   "Persistent development window for experimenting with launcher sessions."
   (:require [babashka.fs :as fs]
+            [clojure.string :as str]
             [cloncher.cui :as cui]
             [cloncher.main :as app]
             [cloncher.menu :as menu]
@@ -239,7 +240,22 @@
   (binding [menu/*configuration* @configuration]
     (render-preview! ui buffer)))
 
+(defn- running-port
+  "The port of a Cloncher Dev nREPL that accepts connections, or nil."
+  []
+  (when-let [port (when (fs/exists? ".nrepl-port") (some-> (slurp ".nrepl-port") str/trim parse-long))]
+    (try
+      (with-open [socket (java.net.Socket.)]
+        (.connect socket (java.net.InetSocketAddress. "127.0.0.1" (int port)) 500)
+        port)
+      (catch Exception _ nil))))
+
 (defn -main [& args]
+  (when-let [port (running-port)]
+    (binding [*out* *err*]
+      (println (str "Cloncher Dev is already running (nREPL on 127.0.0.1:" port ")."))
+      (println "Reload it with: jolt eval desktop --ns user -e '(cloncher.dev/reload!)'"))
+    (System/exit 1))
   (let [request (if (= ["off"] (vec args)) {:kind :off :mode :launcher} (app/parse-args args))]
     (when-not (contains? #{:launcher :dmenu :secret} (:mode request))
       (throw (ex-info "jolt dev accepts off or a launcher view such as apps or menu connect" {})))

@@ -222,6 +222,8 @@ jolt eval desktop --ns user -e '(cloncher.dev/screenshot!)'
 
 The tiled dev host stays open while you turn its embedded launcher on and off. You can inspect its state, open a view with fixture rows, reload code with `cloncher.dev/reload!`, and capture the result without closing the window. Dev previews stop at the point where a production action would run. The [session state machine](src/cloncher/machine.clj) and [panel](src/cloncher/view.clj) are shared with the production overlay.
 
+Only one dev window runs at a time. While one is open, `jolt dev` exits with an error that points you to `jolt eval`.
+
 ```sh
 jolt -Srepro -M:test
 ```
